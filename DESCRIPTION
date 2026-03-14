@@ -1,0 +1,23 @@
+Package: diffIRT
+Type: Package
+Title: Diffusion IRT Models for Response and Response Time Data
+Version: 1.5
+Date: 2015-08-13
+Author: Dylan Molenaar
+Maintainer: Dylan Molenaar <d.molenaar@uva.nl>
+Depends: statmod
+Description: Package to fit diffusion-based IRT models to response and
+        response time data. Models are fit using marginal maximum
+        likelihood. Parameter restrictions (fixed value and equality
+        constraints) are possible. In addition, factor scores (person
+        drift rate and person boundary separation) can be estimated.
+        Model fit assessment tools are also available. The traditional
+        diffusion model can be estimated as well.
+License: GPL-2
+NeedsCompilation: yes
+Packaged: 2026-03-11 05:19:25 UTC; root
+Repository: https://cran.r-universe.dev
+Date/Publication: 2015-08-13 00:00:00 UTC
+RemoteUrl: https://github.com/cran/diffIRT
+RemoteRef: HEAD
+RemoteSha: 334262ac52fd65cfc62df38fedefbc9cbc5e5132

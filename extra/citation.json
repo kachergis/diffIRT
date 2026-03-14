@@ -1,0 +1,34 @@
+[
+  {
+    "title": "Fitting Diffusion Item Response Theory Models for Responses and Response Times Using the {R} Package {diffIRT}",
+    "author": [
+      {
+        "given": "Dylan",
+        "family": "Molenaar",
+        "role": {},
+        "email": {},
+        "comment": {}
+      },
+      {
+        "given": "Francis",
+        "family": "Tuerlinckx",
+        "role": {},
+        "email": {},
+        "comment": {}
+      },
+      {
+        "given": ["Han", "L.", "J."],
+        "family": "van der Maas",
+        "role": {},
+        "email": {},
+        "comment": {}
+      }
+    ],
+    "journal": "Journal of Statistical Software",
+    "year": "2015",
+    "volume": "66",
+    "number": "4",
+    "pages": "1--34",
+    "url": "http://www.jstatsoft.org/v66/i04/"
+  }
+]

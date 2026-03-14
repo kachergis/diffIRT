@@ -1,0 +1,21 @@
+citHeader("To cite diffIRT in publications use:")
+
+citEntry(entry = "Article",
+  title        = "Fitting Diffusion Item Response Theory Models for Responses and Response Times Using the {R} Package {diffIRT}",
+  author       = personList(as.person("Dylan Molenaar"),
+                   as.person("Francis Tuerlinckx"),
+                   person(c("Han", "L.", "J."), "van der Maas")),
+  journal      = "Journal of Statistical Software",
+  year         = "2015",
+  volume       = "66",
+  number       = "4",
+  pages        = "1--34",
+  url          = "http://www.jstatsoft.org/v66/i04/",
+
+  textVersion  =
+  paste("Dylan Molenaar, Francis Tuerlinckx, Han L. J. van der Maas (2015).",
+        "Fitting Diffusion Item Response Theory Models for Responses and Response Times Using the R Package diffIRT.",
+        "Journal of Statistical Software, 66(4), 1-34.",
+        "URL http://www.jstatsoft.org/v66/i04/.")
+)
+

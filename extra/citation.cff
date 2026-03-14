@@ -1,0 +1,51 @@
+# --------------------------------------------
+# CITATION file created with {cffr} R package
+# See also: https://docs.ropensci.org/cffr/
+# --------------------------------------------
+ 
+cff-version: 1.2.0
+message: 'To cite package "diffIRT" in publications use:'
+type: software
+license: GPL-2.0-only
+title: 'diffIRT: Diffusion IRT Models for Response and Response Time Data'
+version: '1.5'
+identifiers:
+- type: doi
+  value: 10.32614/CRAN.package.diffIRT
+abstract: Package to fit diffusion-based IRT models to response and response time
+  data. Models are fit using marginal maximum likelihood. Parameter restrictions (fixed
+  value and equality constraints) are possible. In addition, factor scores (person
+  drift rate and person boundary separation) can be estimated. Model fit assessment
+  tools are also available. The traditional diffusion model can be estimated as well.
+authors:
+- family-names: Molenaar
+  given-names: Dylan
+  email: d.molenaar@uva.nl
+preferred-citation:
+  type: article
+  title: Fitting Diffusion Item Response Theory Models for Responses and Response
+    Times Using the R Package diffIRT
+  authors:
+  - family-names: Molenaar
+    given-names: Dylan
+    email: d.molenaar@uva.nl
+  - family-names: Tuerlinckx
+    given-names: Francis
+  - family-names: Maas
+    given-names: Han L. J.
+    name-particle: van der
+  journal: Journal of Statistical Software
+  year: '2015'
+  volume: '66'
+  issue: '4'
+  url: http://www.jstatsoft.org/v66/i04/
+  start: '1'
+  end: '34'
+repository: https://cran.r-universe.dev
+commit: 334262ac52fd65cfc62df38fedefbc9cbc5e5132
+date-released: '2015-08-13'
+contact:
+- family-names: Molenaar
+  given-names: Dylan
+  email: d.molenaar@uva.nl
+

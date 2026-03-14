@@ -1,0 +1,19 @@
+useDynLib(diffIRT)
+
+export(diffIRT, factest,QQdiff, RespFit, simdiff, simdiffT)
+
+importFrom("statmod", "gauss.quad")
+importFrom("stats", "anova", "logLik", "nobs", "vcov","complete.cases", "integrate", "na.omit", "optim",
+     "pchisq", "qlogis", "quantile", "rlnorm", "rnorm", "runif","uniroot", "var")
+importFrom("graphics", "abline", "hist", "lines", "par")
+importFrom("utils", "combn")
+
+S3method(anova, diffIRT)
+S3method(logLik, diffIRT)
+S3method(nobs, diffIRT)
+S3method(print, diffIRT)
+S3method(coef, diffIRT)
+S3method(print, RespFit)
+S3method(summary, diffIRT)
+S3method(summary, RespFit)
+S3method(vcov, diffIRT)
