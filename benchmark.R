@@ -15,10 +15,13 @@ src_orig <- "src_orig/diffIRT.c"   # original (from CRAN / your repo)
 src_opt  <- "src/diffIRT.c"        # optimised version
 
 compile_so <- function(src, out, openmp = FALSE) {
-  omp_flag <- if (openmp) "-fopenmp" else ""
+  # NB: "-fopenmp" must reach the *compiler*. Passing it as an extra argument to
+  # R CMD SHLIB only adds it to the link line, so _OPENMP was never defined and
+  # the earlier "optimised" build silently ran serially. PKG_CFLAGS fixes that.
+  omp_env <- if (openmp) "PKG_CFLAGS=-fopenmp PKG_LIBS=-fopenmp" else ""
   cmd <- sprintf(
-    "R CMD SHLIB -o %s %s %s 2>&1",
-    out, src, omp_flag
+    "%s R CMD SHLIB -o %s %s 2>&1",
+    omp_env, out, src
   )
   res <- system(cmd, intern = TRUE)
   if (!file.exists(out)) {
