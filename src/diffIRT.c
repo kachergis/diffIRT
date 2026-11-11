@@ -13,6 +13,9 @@
  *     Note: on macOS the default Apple toolchain has no OpenMP; the code then
  *     runs serially. src/Makevars uses $(SHLIB_OPENMP_CFLAGS).
  *  4. Hoisted loop invariants in LLfacA / LLfacV.
+ *  5. factest: new FACscore (per-person 1-D Brent search, OpenMP) replaces the
+ *     joint N-dimensional BFGS. The prior in LLfacA/LLfacV/FACscore is now a
+ *     proper N(0, sd2) density; the original used exp(-.5*P/sqrt(sd2)).
  *
  *  Original copyright 2013 Dylan Molenaar, University of Amsterdam.
  *  GNU GPL v2 or later.
@@ -400,7 +403,7 @@ void LLfacA(double *y, double *x, int *N, int *nit, double *ai, double *vi,
       LL[i] = 1e-300;
     else
       LL[i] = tmp2 / sqrt(2.0 * M_PI * exp(*sd2A))
-               * exp(-0.5 * Ap[i] / sqrt(exp(*sd2A)));
+               * exp(-0.5 * Ap[i] * Ap[i] / exp(*sd2A));   /* N(0, sd2A) prior on log a_p */
   }
 
   double logsum = 0.0;
@@ -451,9 +454,11 @@ void LLfacV(double *y, double *x, int *N, int *nit, double *ai, double *vi,
 
     if (tmp2 == 0.0 || !R_FINITE(tmp2))
       LL[i] = 1e-300;
-    else
+    else {
+      double PV = (*model == 1) ? Vp[i] : log(Vp[i]);
       LL[i] = tmp2 / sqrt(2.0 * M_PI * exp(*sd2V))
-               * exp(-0.5 * Vp[i] / sqrt(exp(*sd2V)));
+               * exp(-0.5 * PV * PV / exp(*sd2V));          /* N(0, sd2V) prior on v_p (D) or log theta_p (Q) */
+    }
   }
 
   double logsum = 0.0;
@@ -556,4 +561,172 @@ void makeT(int *nit, double *design, int *dim, int *r, double *T)
         equal(&design[j], &design[i], dim, &ou);
         T[i + j*(*r)] = ou;
       }
+}
+
+
+/* ------------------------------------------------------------------ */
+/* FACscore: per-subject factor scores for factest()                    */
+/*                                                                      */
+/* The old factest() ran one BFGS over all N person parameters with a   */
+/* numerical gradient (N+1 full LLfacA/LLfacV calls per gradient, and   */
+/* an N x N BFGS matrix). The objective is a sum of independent         */
+/* per-subject terms, so here each subject is minimized on its own      */
+/* with Brent's method (OpenMP over subjects).                          */
+/*                                                                      */
+/* Per-subject objective is identical to the corresponding term of      */
+/* LLfacA (which = 1, gamma) or LLfacV (which = 2, theta), including    */
+/* its prior term.                                                      */
+/*   which = 1: par = log gamma_p (Ap); integrate over drift nodes.     */
+/*   which = 2: par = Vp (model D) or log theta_p (model Q, Vp=exp(par))*/
+/*              integrate over boundary nodes.                          */
+/* Outputs: est[i], hess[i] (numerical 2nd derivative of -2 log post),  */
+/* conv[i] (0 = interior optimum, 1 = at search-interval edge).         */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+  const double *y, *x, *ai, *vi, *xter, *node, *logw;
+  int N, nit, nq, model, which, i;
+  double sd2A, sd2V, eps;
+  double *ls, *a, *lp;     /* workspace: ls/a are nit*nq (which = 2 cache) */
+} facinfo;
+
+static double fac_obj(double par, void *vinfo)
+{
+  facinfo *f = (facinfo *)vinfo;
+  int J = f->nit, Q = f->nq, N = f->N, i = f->i;
+  for (int n = 0; n < Q; n++) f->lp[n] = 0.0;
+  double s2, Pval;
+  if (f->which == 1) {
+    double ap = par;
+    for (int j = 0; j < J; j++) {
+      double yj = f->y[i + j*N];
+      if (yj == -999) continue;
+      double t = yj - f->xter[j], xm = f->x[i + j*N] - .5;
+      double la = ap - f->ai[j], a = exp(la), yy = t/(a*a), ls = LOGZERO;
+      if (yy > 0) { double p = nf_series(yy, f->eps); if (p > 0 && R_FINITE(p)) ls = log(p) - 2.0*la; }
+      for (int n = 0; n < Q; n++) {
+        if (ls == LOGZERO) { f->lp[n] += LOGZERO; continue; }
+        double v = (f->model == 1) ? (f->node[n] - f->vi[j]) : exp(f->node[n] - f->vi[j]);
+        f->lp[n] += ls + v*a*xm - .5*v*v*t;
+      }
+    }
+    s2 = exp(f->sd2A); Pval = par;
+  } else {
+    double Vp = (f->model == 1) ? par : exp(par);
+    for (int j = 0; j < J; j++) {
+      double yj = f->y[i + j*N];
+      if (yj == -999) continue;
+      double t = yj - f->xter[j], xm = f->x[i + j*N] - .5;
+      double v = (f->model == 1) ? (Vp - f->vi[j]) : Vp/exp(f->vi[j]);
+      for (int n = 0; n < Q; n++) {
+        double ls = f->ls[j*Q + n];
+        if (ls == LOGZERO) { f->lp[n] += LOGZERO; continue; }
+        double a = f->a[j*Q + n];
+        f->lp[n] += ls + v*a*xm - .5*v*v*t;
+      }
+    }
+    s2 = exp(f->sd2V); Pval = par;   /* latent is v_p (D) or log theta_p (Q) */
+  }
+  double m = -INFINITY;
+  for (int n = 0; n < Q; n++) { double z = f->lp[n] + f->logw[n]; if (z > m) m = z; }
+  if (!(m > 0.5*LOGZERO) || !R_FINITE(m)) return -2.0*LOGFLOOR;   /* LLfacA/V: LL = 1e-300 */
+  double s = 0.0;
+  for (int n = 0; n < Q; n++) s += exp(f->lp[n] + f->logw[n] - m);
+  /* normal prior on the latent variable: N(0, s2). (The original LLfacA/V used
+     exp(-.5*P/sqrt(s2)), i.e. the deviation was neither squared nor divided by
+     the variance.) */
+  double lpost = m + log(s) - .5*log(2.0*M_PI*s2) - .5*Pval*Pval/s2;
+  return -2.0*lpost;
+}
+
+/* Brent's minimizer on [lo, hi] (golden section + parabolic steps). */
+static double brent_min(double lo, double hi, double (*fn)(double, void *), void *info, double tol)
+{
+  const double c = 0.3819660112501051, eps = 1.4901161193847656e-08;
+  double a = lo, b = hi, v = a + c*(b - a), w = v, x = v, d = 0.0, e = 0.0;
+  double fx = fn(x, info), fv = fx, fw = fx;
+  for (int it = 0; it < 200; it++) {
+    double xm = .5*(a + b), tol1 = eps*fabs(x) + tol/3.0, tol2 = 2.0*tol1;
+    if (fabs(x - xm) <= tol2 - .5*(b - a)) break;
+    double p = 0, q = 0, r = 0, u;
+    if (fabs(e) > tol1) {
+      r = (x - w)*(fx - fv); q = (x - v)*(fx - fw); p = (x - v)*q - (x - w)*r; q = 2.0*(q - r);
+      if (q > 0) p = -p; else q = -q;
+      r = e; e = d;
+    }
+    if (fabs(p) >= fabs(.5*q*r) || p <= q*(a - x) || p >= q*(b - x)) {
+      e = (x < xm) ? b - x : a - x; d = c*e;
+    } else {
+      d = p/q; u = x + d;
+      if (u - a < tol2 || b - u < tol2) d = (x < xm) ? tol1 : -tol1;
+    }
+    u = (fabs(d) >= tol1) ? x + d : (d > 0 ? x + tol1 : x - tol1);
+    double fu = fn(u, info);
+    if (fu <= fx) {
+      if (u < x) b = x; else a = x;
+      v = w; fv = fw; w = x; fw = fx; x = u; fx = fu;
+    } else {
+      if (u < x) a = u; else b = u;
+      if (fu <= fw || w == x) { v = w; fv = fw; w = u; fw = fu; }
+      else if (fu <= fv || v == x || v == w) { v = u; fv = fu; }
+    }
+  }
+  return x;
+}
+
+void FACscore(double *y, double *x, int *N, int *nit, double *ai, double *vi,
+              double *sd2A, double *sd2V, double *ter, int *which, int *model,
+              double *A, double *W, int *nq, double *epsAlt, double *start,
+              double *halfwidth, double *tol, double *est, double *hess, int *conv)
+{
+  int n = *N, J = *nit, Q = *nq;
+  double *xter = (double *)R_alloc(J, sizeof(double));
+  double *node = (double *)R_alloc(Q, sizeof(double));
+  double *logw = (double *)R_alloc(Q, sizeof(double));
+  for (int j = 0; j < J; j++) xter[j] = exp(ter[j]);
+  /* integrate over the *other* latent variable's nodes */
+  double sdOther = sqrt(exp(*which == 1 ? *sd2V : *sd2A));
+  for (int q = 0; q < Q; q++) { node[q] = sdOther*A[q]; logw[q] = log(W[q]); }
+
+  #ifdef _OPENMP
+  #pragma omp parallel
+  #endif
+  {
+    facinfo f;
+    f.y = y; f.x = x; f.ai = ai; f.vi = vi; f.xter = xter; f.node = node; f.logw = logw;
+    f.N = n; f.nit = J; f.nq = Q; f.model = *model; f.which = *which;
+    f.sd2A = *sd2A; f.sd2V = *sd2V; f.eps = *epsAlt;
+    f.lp = (double *)malloc((size_t)Q*sizeof(double));
+    f.ls = (double *)malloc((size_t)J*Q*sizeof(double));
+    f.a  = (double *)malloc((size_t)J*Q*sizeof(double));
+    #ifdef _OPENMP
+    #pragma omp for schedule(dynamic, 8)
+    #endif
+    for (int i = 0; i < n; i++) {
+      f.i = i;
+      if (f.which == 2) {            /* series depends only on the boundary node: cache it */
+        for (int j = 0; j < J; j++) {
+          double yj = y[i + j*n];
+          for (int q = 0; q < Q; q++) {
+            double la = node[q] - ai[j], a = exp(la), ls = LOGZERO;
+            if (yj != -999) {
+              double yy = (yj - xter[j])/(a*a);
+              if (yy > 0) { double p = nf_series(yy, f.eps); if (p > 0 && R_FINITE(p)) ls = log(p) - 2.0*la; }
+            }
+            f.ls[j*Q + q] = ls; f.a[j*Q + q] = a;
+          }
+        }
+      }
+      double s0 = R_FINITE(start[i]) ? start[i] : 0.0;
+      double lo = s0 - *halfwidth, hi = s0 + *halfwidth;
+      double b = brent_min(lo, hi, fac_obj, &f, *tol);
+      est[i] = b;
+      /* not too small: the truncated series makes the objective step by ~1e-6 */
+      /* where the number of terms changes, which a tiny h turns into garbage. */
+      double h = 1e-2;
+      hess[i] = (fac_obj(b + h, &f) - 2.0*fac_obj(b, &f) + fac_obj(b - h, &f))/(h*h);
+      conv[i] = (b - lo < 1e-3*(*halfwidth) || hi - b < 1e-3*(*halfwidth)) ? 1 : 0;
+    }
+    free(f.lp); free(f.ls); free(f.a);
+  }
 }

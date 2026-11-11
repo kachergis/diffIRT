@@ -17,16 +17,14 @@ factest(object,start=NULL,se=F, control=list())
         to the starting values for person drift rate (\code{vp}.
         \code{NA} are allowed.}
   \item{se}{ Logical; Denoting whether standard errors of the parameters should be estimated (can be time consuming, therefore, default is \code{F}).}
-  \item{control}{ a list of control values for the optimisation} 
+  \item{control}{ a list of control values for the estimation. Each person's scores are found
+        separately by a one-dimensional Brent search (in parallel when compiled with OpenMP).}
   \describe{
-        \item{method}{ The optimisation method used by \code{\link{optim}}. Default "BFGS".}
-        \item{eps}{ See \code{\link{optim}} for details and default.}
-        \item{delta}{ See \code{\link{optim}} for details and default.}
-        \item{trace}{ See \code{\link{optim}} for details and default.}
-        \item{fnscale}{ See \code{\link{optim}} for details and default.}
-        \item{parscale}{ See \code{\link{optim}} for details and default.}
-        \item{maxit}{ See \code{\link{optim}} for details. Default is 1999. }
-        \item{reltol}{ See \code{\link{optim}} for details and default.}
+        \item{eps}{ Precision of the series for the diffusion density. Default .01.}
+        \item{tol}{ Convergence tolerance of the per-person search. Default 1e-8.}
+        \item{halfwidth}{ Half-width of the search interval around each person's starting value.
+              Default \code{max(3, 10*sd)}, with sd the estimated population standard deviation of the
+              latent variable. A warning is given when estimates end at the edge of the interval.}
     }
   }
 
@@ -34,6 +32,11 @@ factest(object,start=NULL,se=F, control=list())
   \code{factest} returns empirical Bayes estimates of the person drift rate and 
     the person boundary separation. See \link{diffIRT} for more explanation concerning the parameters in the 
     D-diffusion and Q-diffusion IRT model.
+
+  The prior is a normal density with the estimated population variance, on log boundary
+    separation and on person drift (D-diffusion) or log person drift (Q-diffusion).
+    diffIRT 1.5 and earlier used \code{exp(-.5*P/sd)} in place of \code{exp(-.5*P^2/sd^2)}, so
+    their factor scores differ from the current ones (most visibly for person drift).
 }
 \value{
   Function \code{factest} returns a matrix of parameter estimates and - if \code{se}=T - standard errors.
