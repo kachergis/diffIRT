@@ -201,13 +201,28 @@ below. Where the old behaviour can be restored, the setting is given.
   needs a compiler that supports it (e.g. Homebrew LLVM via `~/.R/Makevars`); with
   Apple clang the package builds and runs serially. `omp.h` is no longer included.
 
-## Known limitations
+## Known limitations and planned work
 
-* `factest()`, `QQdiff()` and `RespFit()` still use non-adaptive quadrature.
-* `RespFit()` counts missing responses as incorrect (with a warning).
+Tracked as issues on GitHub:
+
+* `factest()`, `QQdiff()` and `RespFit()` still use non-adaptive quadrature
+  ([#7](https://github.com/kachergis/diffIRT/issues/7)).
+* `RespFit()` counts missing responses as incorrect, with a warning ([#11](https://github.com/kachergis/diffIRT/issues/11)).
 * `QQdiff()` computes one quantile per person by default, each by root-finding on a
-  numerical integral, so it can be slow for large N.
+  numerical integral, so it can be slow for large N ([#12](https://github.com/kachergis/diffIRT/issues/12)).
 * The person boundary (gamma) and drift (theta) are assumed independent. A correlation
-  between them is not yet supported.
-* `src_orig/` holds the unmodified original C code, used for benchmarking and for the
-  test fixtures. It is excluded from the built package.
+  between them is not yet supported ([#2](https://github.com/kachergis/diffIRT/issues/2)).
+* Planned model extensions:
+  * start-point bias ([#3](https://github.com/kachergis/diffIRT/issues/3));
+  * between-trial variability in drift, start point and non-decision time
+    ([#4](https://github.com/kachergis/diffIRT/issues/4));
+  * person covariates and multiple groups ([#5](https://github.com/kachergis/diffIRT/issues/5)).
+* Planned features:
+  * thread control, `control$threads` ([#6](https://github.com/kachergis/diffIRT/issues/6));
+  * EAP scores and plausible values in `factest()` ([#8](https://github.com/kachergis/diffIRT/issues/8));
+  * missing data and correlated traits in `simdiff()`, and `simulate()`/`predict()`/
+    `fitted()` methods ([#9](https://github.com/kachergis/diffIRT/issues/9));
+  * fit statistics for response times, and person fit ([#10](https://github.com/kachergis/diffIRT/issues/10)).
+
+`src_orig/` holds the unmodified original C code, used for benchmarking and for the test
+fixtures. It is excluded from the built package.
