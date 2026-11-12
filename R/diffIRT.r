@@ -82,7 +82,7 @@ diffIRT=function(rt, x, model="D", constrain=NULL,start=NULL, se=F, control=list
   s0=s0[constrain!=0]
   pars=s0[!duplicated(constrain[constrain!=0])]
   
-  con=list(nq=c(7),method="BFGS",eps=1e-6,delta=1e-7,grad="analytic",diagnostic=F,trace=0,fnscale=1,parscale=rep(1,npars),maxit=1999,reltol=sqrt(.Machine$double.eps))
+  con=list(nq=c(7),method="BFGS",eps=1e-6,delta=1e-7,grad="analytic",restart=5,diagnostic=F,trace=0,fnscale=1,parscale=rep(1,npars),maxit=1999,reltol=sqrt(.Machine$double.eps))
   con[names(control)]=control
   if(length(con$nq)==0)
     stop("Invalid number of quadrature points provided")
@@ -117,8 +117,24 @@ diffIRT=function(rt, x, model="D", constrain=NULL,start=NULL, se=F, control=list
     Quad$nodes*sqrt(2)->A
     hess=F
     if(i==length(con$nq) & se==T) hess=T
-    res=optim(pars,fn=likelihood,gr=deriv,rt=rt,x=x,N=N,nit=nit,model=model,A=A,W=W,nq=nq,eps=con$eps,delta=con$delta,start=start,constrain=constrain,grad=con$grad,method=con$method,
+    fit1=function(p) optim(p,fn=likelihood,gr=deriv,rt=rt,x=x,N=N,nit=nit,model=model,A=A,W=W,nq=nq,eps=con$eps,delta=con$delta,start=start,constrain=constrain,grad=con$grad,method=con$method,
         control=list(trace=con$trace,fnscale=con$fnscale,parscale=con$parscale,maxit=con$maxit,reltol=con$reltol),hessian=hess)
+    res=fit1(pars)
+    # BFGS can drift along a valley until a parameter is far out on the log scale (e.g. a
+    # variance -> 0 or an item drift -> 0). There its gradient vanishes, so optim stops
+    # early and reports convergence. Restart with such parameters reset to their starting
+    # values, and keep the restart only if it fits better.
+    for(r in 1:2){
+      far=which(abs(res$par-hist[1,1:npars])>con$restart)
+      if(length(far)==0 | res$convergence!=0) break
+      p2=res$par; p2[far]=hist[1,far]
+      res2=fit1(p2)
+      res2$counts=res2$counts+res$counts
+      if(res2$convergence!=0 | res2$value>=res$value-1e-6) break
+      cat("Restarted the optimizer after parameter(s)",paste(nms[far],collapse=", "),"drifted far from their starting values; -2LL improved by",
+          round(res$value-res2$value,3),"\n")
+      res=res2
+    }
     if(res$convergence!=0) stop("Convergence problems. Optim error code: ",res$convergence,"\n")
     else pars=res$par
     hist[i+1,1:npars]=pars

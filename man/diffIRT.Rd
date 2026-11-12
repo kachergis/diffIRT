@@ -48,6 +48,10 @@ diffIRT(rt, x, model="D", constrain=NULL,
         \item{eps}{ Precision with which the infinite integral in the likelihood function is approximated. Default is 1e-6 (earlier versions used 0.01; see \bold{Details}).}
         \item{grad}{ \code{"analytic"} (default) for the exact gradient, or \code{"numeric"} for the
               forward-difference gradient used by earlier versions.}
+        \item{restart}{ If a free parameter ends more than \code{restart} units (on the log scale used internally) from its
+              starting value, the optimizer is restarted from the estimates with that parameter reset to its starting value,
+              and the restart is kept if -2LL improves (at most twice). This catches fits in which a variance or item drift runs
+              off towards 0 or infinity, where its gradient vanishes and the optimizer stops early. Default 5; \code{Inf} disables it.}
         \item{delta}{ Step size of the forward-difference gradient (only used when \code{grad="numeric"}). Default is 1e-7.}
         \item{trace}{ See \code{\link{optim}} for details and default.}
         \item{fnscale}{ See \code{\link{optim}} for details and default.}
