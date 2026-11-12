@@ -6,10 +6,34 @@ test_that("RespFit returns a finite Mr statistic", {
   expect_true(is.finite(r$Mr)); expect_gt(r$df, 0)
 })
 
-test_that("RespFit warns about missing data", {
-  s <- sim_data(200, 6, "D", seed = 52, miss = .05)
+test_that("RespFit uses pairwise-available data with missing responses", {
+  s <- sim_data(300, 6, "D", seed = 52, miss = .15)
   f <- quiet_fit(s$rt, s$x)
-  expect_warning(RespFit(f, order = 2), "missing")
+  expect_no_warning(r <- RespFit(f, order = 2))
+  expect_true(is.finite(r$Mr))
+  x <- f$score
+  expect_equal(r$Z$obs[1:6], round(colMeans(x, na.rm = TRUE), 3))
+  both <- !is.na(x[, 1]) & !is.na(x[, 2])
+  expect_equal(r$Z$obs[7], round(mean(x[both, 1] * x[both, 2]), 3))   # pair (1, 2)
+})
+
+test_that("RespFit is unchanged without missing data", {
+  # fits and RespFit results saved before the missing-data change (D order 2, Q order 3)
+  ref <- readRDS(test_path("fixtures", "respfit_main.rds"))
+  for (k in names(ref)) {
+    r <- RespFit(ref[[k]]$f, as.integer(sub(".* ", "", k)))
+    expect_equal(r$Mr, ref[[k]]$Mr, tolerance = 1e-10, label = k)
+    expect_equal(r$df, ref[[k]]$df)
+    expect_equal(r$Z, ref[[k]]$Z)
+  }
+})
+
+test_that("RespFit stops when a pair of items has no joint responses", {
+  s <- sim_data(100, 4, "D", seed = 58)
+  s$x[1:50, 1] <- NA; s$rt[1:50, 1] <- NA
+  s$x[51:100, 2] <- NA; s$rt[51:100, 2] <- NA
+  f <- quiet_fit(s$rt, s$x)
+  expect_error(RespFit(f, 2), "joint responses")
 })
 
 test_that("RespFit moments and covariance agree with full pattern enumeration", {
