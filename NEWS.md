@@ -194,6 +194,25 @@ below. Where the old behaviour can be restored, the setting is given.
   * `halfwidth`: half-width of the search interval (default `max(3, 10 × SD)`). A
     warning is given when an estimate ends at the edge of the interval.
   * `threads`: number of OpenMP threads (default: the value used for the fit).
+* **EAP scores and plausible values** in `factest()`
+  ([#8](https://github.com/kachergis/diffIRT/issues/8)):
+  * `type = "EAP"`: posterior means, and posterior SDs with `se = TRUE`, on a 21 × 21
+    adaptive Gauss–Hermite grid per person (`control$nq.eap`). They agree with a
+    brute-force posterior on a 241 × 241 grid to about 1e-7, and take about 0.03 s for
+    400 persons.
+  * `type = "PV"`, `npv = 5`: plausible values, as a list of `npv` score matrices. Each
+    value is drawn by importance resampling (`control$pv.draws = 200` candidates from a
+    t(5) proposal centred on the person's posterior). When the fit has standard errors,
+    each set first draws the item and population parameters from their asymptotic
+    normal distribution (`control$pv.items`), redrawing any set in which a Ter exceeds
+    the item's fastest RT.
+  * In simulation (`sim/pv_variance.R`: 100 replications per model, N = 300, 10 items,
+    10% missing), the variance of the plausible values across persons matches the
+    population variance: for example 0.249 against 0.25 for theta in the D model, where
+    MAP and EAP scores give 0.138. Q-model theta: plausible values 0.095 against 0.09;
+    MAP 0.017.
+  * `type = "MAP"` (the default) is unchanged.
+  * New C entry point `LLpoints`: each person's log-likelihood at arbitrary latent points.
 * `simdiff()`:
   * `omega`: standard deviations of the person parameters (log gamma, and theta or log
     theta), when they are generated.
@@ -271,7 +290,6 @@ Tracked as issues on GitHub:
     ([#4](https://github.com/kachergis/diffIRT/issues/4));
   * person covariates and multiple groups ([#5](https://github.com/kachergis/diffIRT/issues/5)).
 * Planned features:
-  * EAP scores and plausible values in `factest()` ([#8](https://github.com/kachergis/diffIRT/issues/8));
   * fit statistics for response times, and person fit ([#10](https://github.com/kachergis/diffIRT/issues/10)).
 
 `src_orig/` holds the unmodified original C code, used for benchmarking and for the test

@@ -1,4 +1,4 @@
-factest=function(object,start=NULL,se=F, control=list()){
+factest=function(object,start=NULL,se=F, control=list(), type=c("MAP","EAP","PV"), npv=5){
  N=object$N
  nit=object$nit
  rt=object$rt
@@ -15,10 +15,13 @@ factest=function(object,start=NULL,se=F, control=list()){
  sd2V=object$par.log[3*nit+2]
  if(!is.null(start) & length(start)!=(2*N))
    stop("If you provide starting values, this vector should be of size 2 x [number of subjects].\n")
- con=list(eps=if(is.null(object$control$eps)) .01 else object$control$eps,tol=1e-8,halfwidth=NULL,adaptive=TRUE,threads=object$control$threads)
+ con=list(eps=if(is.null(object$control$eps)) .01 else object$control$eps,tol=1e-8,halfwidth=NULL,adaptive=TRUE,threads=object$control$threads,
+          nq.eap=21,pv.draws=200,pv.items=NULL)
  con[names(control)]=control
  if(!is.null(con$threads)){ oldThreads=setThreads(con$threads); on.exit(setThreads(oldThreads),add=TRUE) }
  if(!is.logical(se)) stop("the 'se' argument should be of type logical")
+ type=match.arg(type)
+ if(type!="MAP") return(factestPost(object,type,se,npv,con))
  
   ou=matrix(,N,2)
   for(i in 1:N){
@@ -84,3 +87,55 @@ factest=function(object,start=NULL,se=F, control=list()){
   }
  
   
+
+# EAP scores and plausible values (see R/posterior.r)
+factestPost=function(object,type,se,npv,con){
+  N=object$N; nit=object$nit
+  rt=object$rt; x=object$score
+  rt[is.na(rt)]=-999; rt[is.na(x)]=-999; x[is.na(x)]=-999
+  par=object$par.log
+  aq=postCentres(object,par,rt,x)
+  nms=c("gamma[p]","theta[p]")
+  if(type=="EAP"){
+    e=eapScores(object,par,rt,x,aq,con$nq.eap)
+    if(any(is.na(e[,1]))) warning(sum(is.na(e[,1]))," subject(s) have a zero likelihood everywhere; their scores are NA.")
+    if(se){ colnames(e)=c(nms[1],paste0(nms[1],".se"),nms[2],paste0(nms[2],".se")); return(e) }
+    e=e[,c(1,3),drop=FALSE]; colnames(e)=nms
+    return(e)
+  }
+  # plausible values: one posterior draw per person per set; with pv.items, each set first
+  # draws the item and population parameters from their asymptotic normal distribution
+  if(!is.numeric(npv) || length(npv)!=1 || npv<1) stop("'npv' should be a positive integer")
+  items=con$pv.items
+  if(is.null(items)) items=!is.null(object$hessian)
+  if(items && is.null(object$hessian)) stop("pv.items = TRUE needs the covariance matrix of the estimates: re-fit with se = TRUE.")
+  if(items){
+    V=vcov(object); V=(V+t(V))/2; free=par[match(1:object$npars,object$constrain)]
+    ev=eigen(V,symmetric=TRUE)
+    if(any(ev$values<=0)) warning("The covariance matrix of the estimates is not positive definite; ",
+      "plausible values draw item parameters only along its positive directions.")
+    L=ev$vectors%*%diag(sqrt(pmax(ev$values,0)),length(ev$values))
+    minRT=log(apply(object$rt,2,min,na.rm=TRUE))   # a draw with Ter above an item's fastest RT
+  }                                                # has zero likelihood: draw again
+  lowESS=0
+  out=lapply(1:npv,function(m){
+    p=par; a=aq
+    if(items){
+      for(tries in 1:100){
+        f=free+as.vector(L%*%stats::rnorm(length(free)))
+        p[object$constrain!=0]=f[object$constrain[object$constrain!=0]]
+        if(all(p[(2*nit+1):(3*nit)]<minRT)) break
+      }
+      if(tries==100) stop("Could not draw item parameters with every Ter below the item's fastest response time.")
+      a=postCentres(object,p,rt,x,fitted=FALSE)
+    }
+    d=pvDraw(object,p,rt,x,a,con$pv.draws)
+    lowESS<<-lowESS+sum(d$ess<10,na.rm=TRUE)
+    v=cbind(exp(d$zA),if(object$model==2) exp(d$zV) else d$zV)
+    colnames(v)=nms
+    v
+  })
+  if(lowESS>0) warning("For ",lowESS," person-draws the importance sample was small (effective size < 10); consider a larger control$pv.draws.")
+  attr(out,"items")=items
+  out
+}

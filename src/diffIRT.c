@@ -21,6 +21,8 @@
  *  7. Adaptive Gauss-Hermite quadrature (LLdiffAQ, DERdiffAQ, AQmoments):
  *     per-subject grids centred on the posterior; control$adaptive (default TRUE).
  *  8. diffIRT_threads: control$threads sets the OpenMP thread count from R.
+ *  9. LLpoints: per-subject log-likelihood at arbitrary latent points (EAP
+ *     scores and plausible values in factest).
  *
  *  Original copyright 2013 Dylan Molenaar, University of Amsterdam.
  *  GNU GPL v2 or later.
@@ -938,6 +940,41 @@ void ddiffQQ(double *y, double *ap, double *ai, double *vp, double *vi,
   if (!(p > 0)) { *ou = 0.0; return; }
   double lb = log(p) - 2.0*log(aal) - .5*exl*exl*(*y-*ter);
   *ou = exp(lb - .5*exl*aal) + exp(lb + .5*exl*aal);
+}
+
+
+/* ------------------------------------------------------------------ */
+/* LLpoints: log-likelihood of each subject's responses at M points of  */
+/* the latent variables (log gamma zA, drift latent zV), no prior. Used */
+/* by factest() for EAP scores (adaptive Gauss-Hermite) and plausible   */
+/* values (importance resampling). Point m of subject i is at i*M + m.  */
+/* ------------------------------------------------------------------ */
+void LLpoints(double *y, double *x, int *N, int *nit, double *ai, double *vi,
+              double *ter, int *model, double *epsAlt, int *M,
+              double *zA, double *zV, double *ou)
+{
+  int n = *N, J = *nit, m = *M;
+  double *xter = (double *)R_alloc(J, sizeof(double));
+  for (int j = 0; j < J; j++) xter[j] = exp(ter[j]);
+  #ifdef _OPENMP
+  #pragma omp parallel for schedule(static)
+  #endif
+  for (int i = 0; i < n; i++) {
+    for (int k = 0; k < m; k++) {
+      size_t ik = (size_t)i*m + k;
+      double l = 0.0;
+      for (int j = 0; j < J; j++) {
+        double yj = y[i + j*n];
+        if (yj == -999) continue;
+        double t = yj - xter[j], la = zA[ik] - ai[j], a = exp(la), u = t/(a*a), p = 0.0;
+        if (u > 0) p = nf_series(u, *epsAlt);
+        if (!(p > 0) || !R_FINITE(p)) { l = R_NegInf; break; }
+        double v = (*model == 1) ? (zV[ik] - vi[j]) : exp(zV[ik] - vi[j]);
+        l += log(p) - 2.0*la + v*a*(x[i + j*n] - .5) - .5*v*v*t;
+      }
+      ou[ik] = l;
+    }
+  }
 }
 
 
