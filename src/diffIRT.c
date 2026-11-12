@@ -18,6 +18,8 @@
  *     proper N(0, sd2) density; the original used exp(-.5*P/sqrt(sd2)).
  *  6. DERdiffAn: analytic gradient (series derivative computed with the
  *     same terms), selected from R by control$grad (default "analytic").
+ *  7. Adaptive Gauss-Hermite quadrature (LLdiffAQ, DERdiffAQ, AQmoments):
+ *     per-subject grids centred on the posterior; control$adaptive (default TRUE).
  *
  *  Original copyright 2013 Dylan Molenaar, University of Amsterdam.
  *  GNU GPL v2 or later.
@@ -525,6 +527,227 @@ void DERdiffAn(double *y, double *x, int *N, int *nit, int *constrain,
     for (int i = 0; i < n; i++) gk += G[(size_t)i*K + k];
     deriv[p-1] += -2.0*gk;
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Adaptive Gauss-Hermite quadrature                                    */
+/* ------------------------------------------------------------------ */
+/* Subject i gets its own product grid: log-boundary nodes               */
+/*   zA = muA[i] + sA[i] * A[n1],  drift nodes zV = muV[i] + sV[i] * A[n2] */
+/* (A, W: Gauss-Hermite rule for a standard normal). With prior           */
+/* N(0, s2A) x N(0, s2V), the marginal likelihood is                       */
+/*   sum_q W[n1] W[n2] * prior(zA, zV) / proposal(zA, zV) * prod_j f_ij    */
+/*   log(prior/proposal) for one axis = log(s/sigma) - z^2/(2 sigma^2) + A^2/2. */
+/* With mu = 0 and s = sigma this is exactly the non-adaptive rule. The    */
+/* nodes are held fixed while the optimizer runs (so the objective is a    */
+/* fixed smooth function and the gradient is exact); the population        */
+/* variances then enter only through the prior term.                      */
+/* A posterior SD never exceeds the prior SD, so each grid scale is capped */
+/* at the current prior SD. Without the cap the rule is invalid once       */
+/* sigma < s (the weight s/sigma at the centre node grows without bound as */
+/* sigma -> 0, which the optimizer can exploit). Where the cap is active   */
+/* the nodes move with sigma, and the gradient includes that dependence.   */
+
+/* Workspace per thread: 4*J*Q + Q*Q + 6*Q doubles. Returns log L_i.      */
+/* g (length 3J+2, or NULL): d log L_i / d (ai, vi, ter, sd2A, sd2V).      */
+/* mom (length 4, or NULL): posterior mean and SD of log ap and of vp.    */
+static double aq_subject(int i, const double *y, const double *x, int n, int J,
+                         const double *ai, const double *vi, const double *xter,
+                         double s2A, double s2V, int mod,
+                         const double *A, const double *W, int Q, double eps,
+                         double muA, double sA, double muV, double sV,
+                         double *ws, double *g, double *mom)
+{
+  int nq2 = Q*Q;
+  double *ls = ws, *dl = ls + J*Q, *aa = dl + J*Q, *uu = aa + J*Q, *lp = uu + J*Q;
+  double *zA = lp + nq2, *zV = zA + Q, *lwA = zV + Q, *lwV = lwA + Q;
+  double *accA = lwV + Q, *accV = accA + Q;
+  double sigA = sqrt(s2A), sigV = sqrt(s2V);
+  /* a variance fixed at (or underflowing to) 0: all nodes at 0, as in the */
+  /* non-adaptive rule, and no prior term                                  */
+  int degA = !(s2A > 0), degV = !(s2V > 0);
+  int capA = !degA && (sA > sigA), capV = !degV && (sV > sigV);
+  if (capA) sA = sigA;
+  if (capV) sV = sigV;
+  for (int k = 0; k < Q; k++) {
+    zA[k] = degA ? 0.0 : muA + sA*A[k];
+    zV[k] = degV ? 0.0 : muV + sV*A[k];
+    lwA[k] = degA ? log(W[k]) : log(W[k]) + log(sA) - .5*log(s2A) - zA[k]*zA[k]/(2.0*s2A) + .5*A[k]*A[k];
+    lwV[k] = degV ? log(W[k]) : log(W[k]) + log(sV) - .5*log(s2V) - zV[k]*zV[k]/(2.0*s2V) + .5*A[k]*A[k];
+  }
+  for (int a = 0; a < Q; a++) for (int b = 0; b < Q; b++) lp[a*Q + b] = lwA[a] + lwV[b];
+
+  /* pass 1: log density of every response at every node */
+  for (int j = 0; j < J; j++) {
+    double yj = y[i + j*n];
+    if (yj == -999) continue;
+    double t = yj - xter[j], xm = x[i + j*n] - .5;
+    for (int n1 = 0; n1 < Q; n1++) {
+      int c = j*Q + n1;
+      double la = zA[n1] - ai[j], a = exp(la), u = t/(a*a), d = 0.0;
+      ls[c] = LOGZERO; aa[c] = a; uu[c] = u;
+      if (u > 0) {
+        double p = g ? nf_series_d(u, eps, &d) : nf_series(u, eps);
+        if (p > 0 && R_FINITE(p) && R_FINITE(d)) ls[c] = log(p) - 2.0*la;
+      }
+      dl[c] = d;
+      double *l = lp + n1*Q;
+      if (ls[c] == LOGZERO) { for (int n2 = 0; n2 < Q; n2++) l[n2] += LOGZERO; continue; }
+      for (int n2 = 0; n2 < Q; n2++) {
+        double v = (mod == 1) ? (zV[n2] - vi[j]) : exp(zV[n2] - vi[j]);
+        l[n2] += ls[c] + v*a*xm - .5*v*v*t;
+      }
+    }
+  }
+  double m = -INFINITY;
+  for (int q = 0; q < nq2; q++) if (lp[q] > m) m = lp[q];
+  double l0 = LOGFLOOR;
+  if (m > 0.5*LOGZERO && R_FINITE(m)) {
+    double s = 0.0;
+    for (int q = 0; q < nq2; q++) s += exp(lp[q] - m);
+    l0 = m + log(s);
+    if (!R_FINITE(l0)) l0 = LOGFLOOR;
+  }
+  if (g) for (int k = 0; k < 3*J + 2; k++) g[k] = 0.0;
+  if (l0 <= LOGFLOOR) {                    /* floored subject: flat, keep old nodes */
+    if (mom) { mom[0] = muA; mom[1] = sA; mom[2] = muV; mom[3] = sV; }
+    return LOGFLOOR;
+  }
+  for (int q = 0; q < nq2; q++) lp[q] = exp(lp[q] - l0);   /* posterior weights */
+
+  if (mom) {
+    double mA = 0, mV = 0, vA = 0, vV = 0;
+    for (int a = 0; a < Q; a++) for (int b = 0; b < Q; b++) {
+      double w = lp[a*Q + b]; mA += w*zA[a]; mV += w*zV[b];
+    }
+    for (int a = 0; a < Q; a++) for (int b = 0; b < Q; b++) {
+      double w = lp[a*Q + b]; vA += w*(zA[a]-mA)*(zA[a]-mA); vV += w*(zV[b]-mV)*(zV[b]-mV);
+    }
+    mom[0] = mA; mom[1] = sqrt(vA); mom[2] = mV; mom[3] = sqrt(vV);
+  }
+  if (!g) return l0;
+
+  /* pass 2: gradient (items as in DERdiffAn; variances via the prior term) */
+  /* d log(prior/proposal weight) / d log sigma^2. Uncapped: nodes fixed,    */
+  /* -1/2 + z^2/(2 s2). Capped (s = sigma, z = mu + sigma A): the log(s/sigma) */
+  /* term is constant and dz/d log s2 = sigma A / 2, giving                 */
+  /* -z A/(2 sigma) + z^2/(2 s2); the items' dependence on z is added below. */
+  double gsA = 0.0, gsV = 0.0;
+  for (int a = 0; a < Q; a++) for (int b = 0; b < Q; b++) {
+    double w = lp[a*Q + b];
+    if (!degA) gsA += w*((capA ? -zA[a]*A[a]/(2.0*sigA) : -.5) + zA[a]*zA[a]/(2.0*s2A));
+    if (!degV) gsV += w*((capV ? -zV[b]*A[b]/(2.0*sigV) : -.5) + zV[b]*zV[b]/(2.0*s2V));
+  }
+  for (int k = 0; k < Q; k++) { accA[k] = 0.0; accV[k] = 0.0; }
+  for (int j = 0; j < J; j++) {
+    double yj = y[i + j*n];
+    if (yj == -999) continue;
+    double t = yj - xter[j], xm = x[i + j*n] - .5;
+    double gai = 0.0, gvi = 0.0, gt = 0.0;
+    for (int n1 = 0; n1 < Q; n1++) {
+      int c = j*Q + n1;
+      if (ls[c] == LOGZERO) continue;
+      double a = aa[c], u = uu[c], d = dl[c];
+      double dla0 = -2.0*u*d - 2.0, dt0 = d/(a*a);
+      const double *w = lp + n1*Q;
+      for (int n2 = 0; n2 < Q; n2++) {
+        double wq = w[n2];
+        if (wq == 0.0) continue;
+        double v = (mod == 1) ? (zV[n2] - vi[j]) : exp(zV[n2] - vi[j]);
+        double dv = a*xm - v*t, dvdz = (mod == 1) ? 1.0 : v;   /* v = zV - vi or exp(zV - vi) */
+        double dla = dla0 + v*a*xm;                            /* = d log f / d zA */
+        gai -= wq*dla;
+        gvi += wq*dv*(-dvdz);
+        gt  += wq*(dt0 - .5*v*v);
+        accA[n1] += wq*dla;
+        accV[n2] += wq*dv*dvdz;
+      }
+    }
+    g[j] = gai; g[J + j] = gvi; g[2*J + j] = -gt*xter[j];
+  }
+  if (capA) for (int k = 0; k < Q; k++) gsA += accA[k]*A[k]*.5*sigA;
+  if (capV) for (int k = 0; k < Q; k++) gsV += accV[k]*A[k]*.5*sigV;
+  g[3*J] = gsA; g[3*J + 1] = gsV;
+  return l0;
+}
+
+/* Shared driver. what: 0 = likelihood, 1 = gradient, 2 = posterior moments. */
+static void aq_driver(int what, double *y, double *x, int *N, int *nit, int *constrain, int *npar,
+                      double *ai, double *vi, double *sd2A, double *sd2V, double *ter, int *model,
+                      double *A, double *W, int *nq, double *epsAlt,
+                      double *muA, double *sA, double *muV, double *sV,
+                      double *ou, double *LL, double *deriv, double *mom)
+{
+  int n = *N, J = *nit, Q = *nq, K = 3*J + 2;
+  double s2A = exp(*sd2A), s2V = exp(*sd2V);
+  double *xter = (double *)R_alloc(J, sizeof(double));
+  double *logL = (double *)R_alloc(n, sizeof(double));
+  double *G = (what == 1) ? (double *)R_alloc((size_t)n*K, sizeof(double)) : NULL;
+  for (int j = 0; j < J; j++) xter[j] = exp(ter[j]);
+  size_t wsz = (size_t)4*J*Q + (size_t)Q*Q + 6*(size_t)Q;
+
+  #ifdef _OPENMP
+  #pragma omp parallel
+  #endif
+  {
+    double *ws = (double *)malloc(wsz*sizeof(double));
+    #ifdef _OPENMP
+    #pragma omp for schedule(static)
+    #endif
+    for (int i = 0; i < n; i++)
+      logL[i] = aq_subject(i, y, x, n, J, ai, vi, xter, s2A, s2V, *model, A, W, Q, *epsAlt,
+                           muA[i], sA[i], muV[i], sV[i], ws,
+                           G ? G + (size_t)i*K : NULL, (what == 2) ? mom + 4*(size_t)i : NULL);
+    free(ws);
+  }
+
+  double s = 0.0;
+  for (int i = 0; i < n; i++) {
+    s += logL[i];
+    if (LL) LL[i] = (logL[i] <= LOGFLOOR) ? 1e-300 : exp(logL[i]);
+  }
+  if (ou) *ou = -2.0 * s;
+  if (what == 1) {
+    int P = *npar;
+    for (int p = 0; p < P; p++) deriv[p] = 0.0;
+    for (int k = 0; k < K; k++) {
+      int p = constrain[k];
+      if (p < 1 || p > P) continue;
+      double gk = 0.0;
+      for (int i = 0; i < n; i++) gk += G[(size_t)i*K + k];
+      deriv[p-1] += -2.0*gk;
+    }
+  }
+}
+
+void LLdiffAQ(double *y, double *x, int *N, int *nit, double *ai, double *vi,
+              double *sd2A, double *sd2V, double *ter, int *model,
+              double *A, double *W, int *nq, double *epsAlt,
+              double *muA, double *sA, double *muV, double *sV, double *ou, double *LL)
+{
+  aq_driver(0, y, x, N, nit, NULL, NULL, ai, vi, sd2A, sd2V, ter, model, A, W, nq, epsAlt,
+            muA, sA, muV, sV, ou, LL, NULL, NULL);
+}
+
+void DERdiffAQ(double *y, double *x, int *N, int *nit, int *constrain, int *npar,
+               double *ai, double *vi, double *sd2A, double *sd2V, double *ter, int *model,
+               double *A, double *W, int *nq, double *epsAlt,
+               double *muA, double *sA, double *muV, double *sV,
+               double *ou, double *LL, double *deriv)
+{
+  aq_driver(1, y, x, N, nit, constrain, npar, ai, vi, sd2A, sd2V, ter, model, A, W, nq, epsAlt,
+            muA, sA, muV, sV, ou, LL, deriv, NULL);
+}
+
+/* Posterior moments (mom[4*i + 0..3] = mean, SD of log ap; mean, SD of vp) */
+/* computed on the current grid; used to re-centre the grid.               */
+void AQmoments(double *y, double *x, int *N, int *nit, double *ai, double *vi,
+               double *sd2A, double *sd2V, double *ter, int *model,
+               double *A, double *W, int *nq, double *epsAlt,
+               double *muA, double *sA, double *muV, double *sV, double *ou, double *mom)
+{
+  aq_driver(2, y, x, N, nit, NULL, NULL, ai, vi, sd2A, sd2V, ter, model, A, W, nq, epsAlt,
+            muA, sA, muV, sV, ou, NULL, NULL, mom);
 }
 
 /* ------------------------------------------------------------------ */

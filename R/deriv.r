@@ -1,4 +1,4 @@
-  deriv=function(pars,rt,x,N,nit,model,A,W,nq,eps,delta,start,constrain,grad="analytic"){
+  deriv=function(pars,rt,x,N,nit,model,A,W,nq,eps,delta,start,constrain,grad="analytic",aq=NULL){
     par=rep(999,3*nit+2)
     par[constrain!=0]=pars[constrain]
     par[constrain==0]=start[constrain==0]
@@ -7,6 +7,11 @@
     ter=par[(2*nit+1):(3*nit)]
     sd2A=par[3*nit+1]
     sd2V=par[3*nit+2]
+    if(!is.null(aq)) return(.C("DERdiffAQ",as.double(rt),as.double(x),as.integer(N),as.integer(nit),as.integer(constrain),as.integer(max(constrain)),
+                      as.double(ai),as.double(vi),as.double(sd2A),as.double(sd2V),as.double(ter),as.integer(model),
+                      as.double(A),as.double(W),as.integer(nq),as.double(eps),
+                      as.double(aq$muA),as.double(aq$sA),as.double(aq$muV),as.double(aq$sV),
+                      as.double(-1),as.double(matrix(0,N)),as.double(matrix(0,max(constrain))))[[23]])
     result=.C(if(grad=="numeric") "DERdiff" else "DERdiffAn",as.double(rt),as.double(x),as.integer(N),as.integer(nit),as.integer(constrain),as.integer(max(constrain)),as.double(ai),as.double(vi),as.double(sd2A),
                       as.double(sd2V),as.double(ter),as.integer(model),as.double(A),as.double(W),as.integer(nq),
                       as.double(eps),as.double(delta),as.double(-1),as.double(matrix(0,N)),as.double(matrix(0,max(constrain))))

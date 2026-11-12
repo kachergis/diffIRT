@@ -3,7 +3,7 @@ useDynLib(diffIRT)
 export(diffIRT, factest,QQdiff, RespFit, simdiff, simdiffT)
 
 importFrom("statmod", "gauss.quad")
-importFrom("stats", "anova", "logLik", "nobs", "vcov","complete.cases", "integrate", "na.omit", "optim",
+importFrom("stats", "anova", "logLik", "nobs", "vcov","complete.cases", "integrate", "na.omit", "optim", "optimHess",
      "pchisq", "qlogis", "quantile", "rlnorm", "rnorm", "runif","uniroot", "var")
 importFrom("graphics", "abline", "hist", "lines", "par")
 importFrom("utils", "combn")
