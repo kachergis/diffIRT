@@ -132,6 +132,14 @@ below. Where the old behaviour can be restored, the setting is given.
   computed from joint probabilities of at most 2 × `order` items. 14 items: 44 s →
   0.4 s. 20 items: 1.3 s. 40 items: 11 s. It was previously infeasible beyond about 14
   items.
+* **`QQdiff()`.** The predicted RT distribution of an item is integrated once on a grid
+  (500 panels of 8-point Gauss–Legendre, narrow near Ter), and all quantiles come from
+  inverting its cubic Hermite interpolant. Previously each quantile called `uniroot()` on
+  `integrate()`. N = 1000, 5 items, one quantile per person: about 30 s → 0.2 s. The
+  quantiles agree with a high-precision reference to about 1e-8; the old ones were
+  accurate only to about 1e-4 (the default `uniroot()` tolerance). The default number of
+  quantiles is now `min(N, 100)` instead of N
+  ([#12](https://github.com/kachergis/diffIRT/issues/12)).
 * **The `nq` ramp-up** (e.g. `nq = c(1, 3, 5, 7)`) no longer pays off. The optimizer
   restarts at each stage, so with the faster likelihood a full ramp is slower than
   `nq = 7` alone. `nq = c(1, 7)` can be slightly faster.
@@ -166,7 +174,7 @@ below. Where the old behaviour can be restored, the setting is given.
   grid. It returned −999 where the density is 0, which `pdiffIRT` would then integrate
   as a value. The density is now computed on the log scale and returns 0. With the
   default 7-point grid neither problem showed up in practice: densities integrate to 1,
-  as before.
+  as before. The histogram's predicted density was drawn from log Ter instead of Ter.
 * **`benchmark.R`** passed `-fopenmp` only to the linker, so its "OpenMP" build ran
   serially.
 
@@ -250,8 +258,6 @@ Tracked as issues on GitHub:
   0.1% of a 61-point grid, and the `RespFit()` moments within 0.001
   ([#7](https://github.com/kachergis/diffIRT/issues/7), resolved together with
   adaptive grids in `factest()`).
-* `QQdiff()` computes one quantile per person by default, each by root-finding on a
-  numerical integral, so it can be slow for large N ([#12](https://github.com/kachergis/diffIRT/issues/12)).
 * The person boundary (gamma) and drift (theta) are assumed independent. A correlation
   between them is not yet supported ([#2](https://github.com/kachergis/diffIRT/issues/2)).
 * `simdiff()`'s rejection sampler can fail (stop at `max.iter`) for extreme

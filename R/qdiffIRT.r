@@ -1,10 +1,15 @@
-qdiffIRT=function(p,ai,vi,ter,sd2A,sd2V,maxRT,A,W,model,eps){
-  ou=c()
-  for(ii in 1:length(p)){
-    tmp=function(x) pdiffIRT(x,ai,vi,ter,sd2A,sd2V,A,W,model,eps) -p[ii]
-    if(ii==1) ou[ii] = uniroot(tmp,c(exp(ter)+0.001,maxRT))$root
-      else ou[ii] = uniroot(tmp,c(ou[ii-1],maxRT))$root
-    }
-  return(ou)
+# Quantiles of the predicted RT distribution of one item (see cdfGrid in pdiffIRT.r):
+# locate each probability's panel, then bisect the cubic Hermite CDF within it
+# (vectorized over p; 50 halvings of one panel).
+qdiffIRT=function(p,ai,vi,ter,sd2A,sd2V,maxRT,A,W,model,eps,panels=500){
+  g=cdfGrid(ai,vi,ter,sd2A,sd2V,maxRT,A,W,model,eps,panels=panels,pmax=max(p))
+  if(max(p)>g$F[length(g$F)]) stop("The predicted CDF does not reach the requested probabilities; increase 'maxRT'.")
+  k=pmin(findInterval(p,g$F,left.open=TRUE),length(g$e)-1)
+  lo=g$e[k]; hi=g$e[k+1]
+  for(it in 1:50){
+    mid=(lo+hi)/2
+    below=cdfEval(g,mid)<p
+    lo[below]=mid[below]; hi[!below]=mid[!below]
+  }
+  (lo+hi)/2
 }
-
