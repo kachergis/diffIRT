@@ -15,7 +15,7 @@ factest=function(object,start=NULL,se=F, control=list()){
  sd2V=object$par.log[3*nit+2]
  if(!is.null(start) & length(start)!=(2*N))
    stop("If you provide starting values, this vector should be of size 2 x [number of subjects].\n")
- con=list(eps=if(is.null(object$control$eps)) .01 else object$control$eps,tol=1e-8,halfwidth=NULL)
+ con=list(eps=if(is.null(object$control$eps)) .01 else object$control$eps,tol=1e-8,halfwidth=NULL,adaptive=TRUE)
  con[names(control)]=control
  if(!is.logical(se)) stop("the 'se' argument should be of type logical")
  
@@ -37,6 +37,11 @@ factest=function(object,start=NULL,se=F, control=list()){
  x[is.na(x)]=-999
 
    pars=c(apstart,vpstart)
+  # Adaptive grids from the fit (diffIRT(..., control=list(adaptive=TRUE)), the default):
+  # integrate over the other latent variable on each person's grid, and start each
+  # search at the person's posterior mean instead of the EZ approximation.
+  aq=if(isTRUE(con$adaptive)) object$aq else NULL
+  if(!is.null(aq)) pars=c(aq$muA,aq$muV)
   if(!is.null(start)) pars[!is.na(start)]=start[!is.na(start)]
 
   # Each person's score is a separate 1-D problem (the old joint BFGS over all N
@@ -47,7 +52,10 @@ factest=function(object,start=NULL,se=F, control=list()){
     r = .C("FACscore", as.double(rt), as.double(x), as.integer(N), as.integer(nit), as.double(ai),
            as.double(vi), as.double(sd2A), as.double(sd2V), as.double(ter), as.integer(which),
            as.integer(model), as.double(A), as.double(W), as.integer(nq), as.double(con$eps),
-           st, as.double(hw), as.double(con$tol), est=double(N), hess=double(N), conv=integer(N))
+           st, as.double(hw), as.double(con$tol), as.integer(!is.null(aq)),
+           as.double(if(is.null(aq)) double(N) else if(which==1) aq$muV else aq$muA),
+           as.double(if(is.null(aq)) double(N) else if(which==1) aq$sV else aq$sA),
+           est=double(N), hess=double(N), conv=integer(N))
     if (any(r$conv != 0))
       warning(sum(r$conv != 0), " subject(s) have a ", c("gamma", "theta")[which],
               " estimate at the edge of the search interval; consider a larger control$halfwidth.")
