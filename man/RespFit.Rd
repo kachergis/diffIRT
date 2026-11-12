@@ -35,7 +35,13 @@ The moments, their covariance matrix and their derivatives are computed directly
 2 x \code{order} items, so the test is feasible for long tests (about 1 s for 20 items and 11 s for 40 items with
 \code{order=2}). diffIRT 1.5 and earlier enumerated all 2^\code{nit} response patterns (infeasible beyond about 14
 items). Their Q-model derivatives were wrong (the item drifts were left on the log scale), and their df
-subtracted 2 more than the number of estimated parameters, so their Mr values and p-values differ from the current ones.}
+subtracted 2 more than the number of estimated parameters, so their Mr values and p-values differ from the current ones.
+
+Missing responses are allowed. Each observed moment is computed from the persons who answered all items in it
+(pairwise-available data), and the covariance of two moments is scaled by the number of persons who answered the
+items of both. This assumes the responses are missing completely at random (MCAR). With no missing data the
+results are the same as before; diffIRT 1.5 and earlier counted missing responses as incorrect, which biased the
+observed moments downward.}
 
 \value{
   Returns an object of class \code{RespFit} with entries:

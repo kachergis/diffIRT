@@ -17,17 +17,29 @@ RespFit=function(object,order=2){
   A=object$A
   x=object$score
   constrain=object$constrain
-  if(any(is.na(x)))
-    warning("RespFit counts missing responses as incorrect when computing the observed moments, so Mr can be biased when there are missing data.")
   if(order>nit) stop("'order' cannot exceed the number of items.")
 
-  # observed moments, in the order of fitItems(): all single items, then all pairs, ...
-  o=unlist(lapply(1:order,function(i) fitObs(x,i)))
-
-  # the moments: item sets S (one per row of fitItems, without its leading all-zero row)
+  # the moments: item sets S (one per row of fitItems, without its leading all-zero row),
+  # in the order: all single items, then all pairs, ...
   X=fitItems(nit,order)[-1,,drop=FALSE]
   sets=lapply(1:nrow(X),function(r) which(X[r,]==1))
   nm=length(sets)
+
+  # Observed moments from pairwise-available data: p_S is the proportion of persons with all
+  # items in S correct, among the n_S persons who answered all items in S. (Versions <= 1.5
+  # divided by N, so a missing response counted as incorrect.) Under MCAR the persons behind
+  # p_S and p_T overlap in the n_{S u T} who answered all of S u T, so
+  # Cov(p_S, p_T) = n_{S u T} / (n_S n_T) * (pi_{S u T} - pi_S pi_T); with no missing data this
+  # is the usual Xi / N.
+  obs=!is.na(x)
+  x0=x; x0[!obs]=0
+  R=sapply(sets,function(S) rowSums(obs[,S,drop=FALSE])==length(S))          # N x moments: answered all of S
+  C=sapply(sets,function(S) rowSums(x0[,S,drop=FALSE])==length(S))           # N x moments: all of S correct
+  R=matrix(R,N); C=matrix(C,N)
+  n=colSums(R)
+  if(any(n<2)) stop("Some items (or pairs of items) have fewer than 2 joint responses; Mr cannot be computed.")
+  o=colSums(C)/n
+  nn=crossprod(R+0)/outer(n,n)                 # n_{S u T} / (n_S n_T)
 
   # probability correct for each item at each node of the (boundary x drift) product grid
   nq=length(A)
@@ -56,7 +68,7 @@ RespFit=function(object,order=2){
       E2[a,b]=E2[b,a]=sum(Wq*apply(p[,union(sets[[a]],sets[[b]]),drop=FALSE],1,prod))
     }
   }
-  k=E2-pi.vec%*%t(pi.vec)                       # asymptotic covariance of the moments (Xi_r)
+  k=(E2-pi.vec%*%t(pi.vec))*nn                  # covariance of the observed moments (Xi_r / N without missing data)
 
   # Derivatives of the moments with respect to the free parameters (mapped through
   # 'constrain'). Responses alone do not identify every parameter: in the D model the
@@ -89,12 +101,12 @@ RespFit=function(object,order=2){
   } else {
     Cr=ki-ki%*%U%*%solve(t(U)%*%ki%*%U)%*%t(U)%*%ki
     res=o-pi.vec
-    Mr=N*as.numeric(t(res)%*%Cr%*%res)
+    Mr=as.numeric(t(res)%*%Cr%*%res)
     df=nm-rk
   }
 
   nms=sapply(1:nrow(X),function(r) paste(X[r,],collapse=""))
-  nrms=sqrt(N)*(o-pi.vec)/sqrt(1/diag(Cr))
+  nrms=(o-pi.vec)*sqrt(diag(Cr))
   mat=data.frame(pred=round(pi.vec,3),obs=round(o,3),Z=round(nrms,3),row.names=nms)
   respfitRES=list(model=model,Z=mat,Mr=Mr,df=df,order=order,nit=nit)
   class(respfitRES)<- "RespFit"

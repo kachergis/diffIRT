@@ -152,9 +152,15 @@ below. Where the old behaviour can be restored, the setting is given.
   uninformative error.
 * **`anova()`** compared `object$x`, which does not exist, so its "different dataset"
   warning never fired. It now compares the responses and RTs.
-* **`RespFit()`** now warns that missing responses are counted as incorrect in the
-  observed moments. `print` and `summary` show the order actually used instead of
-  always "Order 2".
+* **`RespFit()` with missing data.** Missing responses were counted as incorrect in the
+  observed moments, which biased them downward. Each moment is now computed from the
+  persons who answered all its items, and the covariance of two moments is scaled by
+  the number who answered the items of both (valid under MCAR). Results without
+  missing data are unchanged ([#11](https://github.com/kachergis/diffIRT/issues/11)).
+  With 10% and 20% MCAR missingness (8 items, N = 500, 100 replications;
+  `sim/respfit_missing.R`), mean Mr is 18.2–18.6 for df 19 (D) and 26.1–27.0 for
+  df 27 (Q), with 2–8% rejected at .05. Counting missing as incorrect rejected 31–75%.
+  `print` and `summary` show the order actually used instead of always "Order 2".
 * **Predicted RT density (`QQdiff()`).** The density computed exp(v·a/2) before
   multiplying by exp(−v²t/2), which overflows to Inf on the extreme nodes of a fine
   grid. It returned −999 where the density is 0, which `pdiffIRT` would then integrate
@@ -244,7 +250,6 @@ Tracked as issues on GitHub:
   0.1% of a 61-point grid, and the `RespFit()` moments within 0.001
   ([#7](https://github.com/kachergis/diffIRT/issues/7), resolved together with
   adaptive grids in `factest()`).
-* `RespFit()` counts missing responses as incorrect, with a warning ([#11](https://github.com/kachergis/diffIRT/issues/11)).
 * `QQdiff()` computes one quantile per person by default, each by root-finding on a
   numerical integral, so it can be slow for large N ([#12](https://github.com/kachergis/diffIRT/issues/12)).
 * The person boundary (gamma) and drift (theta) are assumed independent. A correlation
