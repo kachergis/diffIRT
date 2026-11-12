@@ -213,6 +213,33 @@ below. Where the old behaviour can be restored, the setting is given.
     MAP 0.017.
   * `type = "MAP"` (the default) is unchanged.
   * New C entry point `LLpoints`: each person's log-likelihood at arbitrary latent points.
+* **Fit statistics for response times and persons**
+  ([#10](https://github.com/kachergis/diffIRT/issues/10)):
+  * `RTFit(object, bins = 10)` gives a chi-square test per item and over all items. It
+    compares observed and expected proportions of response (0/1) × RT bin, with bin
+    edges at the item's predicted RT deciles. The residual covariance accounts for
+    parameter estimation through Cov(p, θ̂) = ΔV for the maximum likelihood estimate,
+    so no bootstrap or refitting is needed. df = 2 × bins − 1 per item.
+  * `PersonFit(object, nsim = 1000)` gives each person's marginal log-likelihood with a
+    Monte Carlo p-value. The reference is persons simulated from the fitted model with
+    the same items answered. It also reports a standardized `lz`.
+  * Calibration and power (`sim/fit_statistics.R`: 100 replications, N = 500, 10 items,
+    10% missing; rejection rates at .05):
+
+    | Condition | `RTFit` item | `RTFit` overall | `PersonFit` |
+    |---|---|---|---|
+    | Null, D / Q | .052 / .052 | .06 / .09 | .049 / .048 |
+    | Item 1 RT +0.3 s for 30% of persons, D / Q | .58 / .52 (item 1) | .25 / .33 | — |
+    | 5% inattentive on 5 items (RT ×2, random responses), D / Q | — | .42 / .47 | .64 / .63 |
+    | 5% rapid guessing on 5 items, D / Q | — | .49 / .57 | .10 / .09 |
+
+    Rapid guessing is hard to detect at the person level. The guessers pull the
+    estimated Ter down, which masks them: with the true item parameters, 88% were
+    flagged. Fast responses at chance accuracy on *every* item fit the model as a person
+    with a small boundary, so they show up as a low `gamma[p]` rather than as misfit. A
+    purification step (refit without the flagged persons) raised the Type I error to
+    9% and power only to 24%, so it was not added.
+  * New C entry point `ddiffBase`: node-wise first-passage density.
 * `simdiff()`:
   * `omega`: standard deviations of the person parameters (log gamma, and theta or log
     theta), when they are generated.
@@ -289,8 +316,6 @@ Tracked as issues on GitHub:
   * between-trial variability in drift, start point and non-decision time
     ([#4](https://github.com/kachergis/diffIRT/issues/4));
   * person covariates and multiple groups ([#5](https://github.com/kachergis/diffIRT/issues/5)).
-* Planned features:
-  * fit statistics for response times, and person fit ([#10](https://github.com/kachergis/diffIRT/issues/10)).
 
 `src_orig/` holds the unmodified original C code, used for benchmarking and for the test
 fixtures. It is excluded from the built package.
