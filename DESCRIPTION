@@ -1,8 +1,8 @@
 Package: diffIRT
 Type: Package
 Title: Diffusion IRT Models for Response and Response Time Data
-Version: 1.5
-Date: 2015-08-13
+Version: 1.5.9000
+Date: 2026-11-12
 Author: Dylan Molenaar
 Maintainer: Dylan Molenaar <d.molenaar@uva.nl>
 Depends: statmod
