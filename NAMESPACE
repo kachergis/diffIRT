@@ -1,6 +1,6 @@
 useDynLib(diffIRT)
 
-export(diffIRT, factest,QQdiff, RespFit, simdiff, simdiffT)
+export(diffIRT, factest,QQdiff, RespFit, RTFit, PersonFit, simdiff, simdiffT)
 
 importFrom("statmod", "gauss.quad")
 importFrom("stats", "anova", "logLik", "nobs", "vcov","complete.cases", "integrate", "na.omit", "optim", "optimHess",
@@ -20,3 +20,5 @@ S3method(vcov, diffIRT)
 S3method(predict, diffIRT)
 S3method(fitted, diffIRT)
 S3method(simulate, diffIRT)
+S3method(print, RTFit)
+S3method(print, PersonFit)

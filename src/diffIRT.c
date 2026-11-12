@@ -23,6 +23,7 @@
  *  8. diffIRT_threads: control$threads sets the OpenMP thread count from R.
  *  9. LLpoints: per-subject log-likelihood at arbitrary latent points (EAP
  *     scores and plausible values in factest).
+ * 10. ddiffBase: node-wise first-passage density for RTFit().
  *
  *  Original copyright 2013 Dylan Molenaar, University of Amsterdam.
  *  GNU GPL v2 or later.
@@ -973,6 +974,27 @@ void LLpoints(double *y, double *x, int *N, int *nit, double *ai, double *vi,
         l += log(p) - 2.0*la + v*a*(x[i + j*n] - .5) - .5*v*v*t;
       }
       ou[ik] = l;
+    }
+  }
+}
+
+
+/* ------------------------------------------------------------------ */
+/* ddiffBase: log of the response-independent part of the first-passage */
+/* density, log(series(t/a^2)) - 2 log a, for decision times t (length T) */
+/* and log boundaries la (length Q); out is T x Q (column-major), -Inf    */
+/* where t <= 0. The density of response x is then                       */
+/* exp(out + v*a*(x - .5) - v^2 t/2). Used by RTFit().                    */
+/* ------------------------------------------------------------------ */
+void ddiffBase(double *t, int *T, double *la, int *Q, double *epsAlt, double *out)
+{
+  int nt = *T, nq = *Q;
+  for (int q = 0; q < nq; q++) {
+    double a = exp(la[q]);
+    for (int k = 0; k < nt; k++) {
+      double u = t[k]/(a*a), p = 0.0;
+      if (u > 0) p = nf_series(u, *epsAlt);
+      out[k + (size_t)q*nt] = (p > 0 && R_FINITE(p)) ? log(p) - 2.0*la[q] : R_NegInf;
     }
   }
 }
