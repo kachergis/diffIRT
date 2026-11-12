@@ -176,6 +176,22 @@ below. Where the old behaviour can be restored, the setting is given.
   * `tol`: tolerance of the per-person search (default `1e-8`).
   * `halfwidth`: half-width of the search interval (default `max(3, 10 × SD)`). A
     warning is given when an estimate ends at the edge of the interval.
+* `simdiff()`:
+  * `omega`: standard deviations of the person parameters (log gamma, and theta or log
+    theta), when they are generated.
+  * `rho`: correlation between the two person latent variables (note that `diffIRT()`
+    itself still assumes independence; see [#2](https://github.com/kachergis/diffIRT/issues/2)).
+  * `miss`: proportion of responses set to `NA` completely at random.
+
+  With the default arguments the random numbers are drawn exactly as before, so
+  existing seeds reproduce the same data.
+* New methods for fitted models
+  ([#9](https://github.com/kachergis/diffIRT/issues/9)):
+  * `predict()`: expected P(correct) and mean RT per item, for the population or for
+    given person parameters.
+  * `fitted()`: the same at each person's factor scores.
+  * `simulate()`: new datasets from the fitted model, optionally with the same missing
+    pattern, for parametric bootstraps and posterior predictive checks.
 * The fit object stores the adaptive grids (`$aq`). The per-person log-likelihoods
   (`$subjLL`) use them.
 
@@ -229,6 +245,11 @@ Tracked as issues on GitHub:
   numerical integral, so it can be slow for large N ([#12](https://github.com/kachergis/diffIRT/issues/12)).
 * The person boundary (gamma) and drift (theta) are assumed independent. A correlation
   between them is not yet supported ([#2](https://github.com/kachergis/diffIRT/issues/2)).
+* `simdiff()`'s rejection sampler can fail (stop at `max.iter`) for extreme
+  person–item combinations where |v·a| is very large (responses almost certainly
+  correct). This is rare with the default parameter distributions. The sampler is
+  fast enough in R (0.2 s for 1000 persons × 20 items), so it was not ported to C
+  ([#9](https://github.com/kachergis/diffIRT/issues/9)).
 * Planned model extensions:
   * start-point bias ([#3](https://github.com/kachergis/diffIRT/issues/3));
   * between-trial variability in drift, start point and non-decision time
@@ -237,8 +258,6 @@ Tracked as issues on GitHub:
 * Planned features:
   * thread control, `control$threads` ([#6](https://github.com/kachergis/diffIRT/issues/6));
   * EAP scores and plausible values in `factest()` ([#8](https://github.com/kachergis/diffIRT/issues/8));
-  * missing data and correlated traits in `simdiff()`, and `simulate()`/`predict()`/
-    `fitted()` methods ([#9](https://github.com/kachergis/diffIRT/issues/9));
   * fit statistics for response times, and person fit ([#10](https://github.com/kachergis/diffIRT/issues/10)).
 
 `src_orig/` holds the unmodified original C code, used for benchmarking and for the test
