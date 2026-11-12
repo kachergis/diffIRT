@@ -82,7 +82,7 @@ diffIRT=function(rt, x, model="D", constrain=NULL,start=NULL, se=F, control=list
   s0=s0[constrain!=0]
   pars=s0[!duplicated(constrain[constrain!=0])]
   
-  con=list(nq=c(7),method="BFGS",eps=.01,delta=1e-7,diagnostic=F,trace=0,fnscale=1,parscale=rep(1,npars),maxit=1999,reltol=sqrt(.Machine$double.eps))
+  con=list(nq=c(7),method="BFGS",eps=1e-6,delta=1e-7,grad="analytic",diagnostic=F,trace=0,fnscale=1,parscale=rep(1,npars),maxit=1999,reltol=sqrt(.Machine$double.eps))
   con[names(control)]=control
   if(length(con$nq)==0)
     stop("Invalid number of quadrature points provided")
@@ -117,7 +117,7 @@ diffIRT=function(rt, x, model="D", constrain=NULL,start=NULL, se=F, control=list
     Quad$nodes*sqrt(2)->A
     hess=F
     if(i==length(con$nq) & se==T) hess=T
-    res=optim(pars,fn=likelihood,gr=deriv,rt=rt,x=x,N=N,nit=nit,model=model,A=A,W=W,nq=nq,eps=con$eps,delta=con$delta,start=start,constrain=constrain,method=con$method,
+    res=optim(pars,fn=likelihood,gr=deriv,rt=rt,x=x,N=N,nit=nit,model=model,A=A,W=W,nq=nq,eps=con$eps,delta=con$delta,start=start,constrain=constrain,grad=con$grad,method=con$method,
         control=list(trace=con$trace,fnscale=con$fnscale,parscale=con$parscale,maxit=con$maxit,reltol=con$reltol),hessian=hess)
     if(res$convergence!=0) stop("Convergence problems. Optim error code: ",res$convergence,"\n")
     else pars=res$par
@@ -130,7 +130,7 @@ diffIRT=function(rt, x, model="D", constrain=NULL,start=NULL, se=F, control=list
 
   subjLL=calcSubjLL(pars,rt=rt,x=x,N=N,nit=nit,model=model,A=A,W=W,nq=nq,eps=con$eps,delta=con$delta,start=start,constrain=constrain)
   if(con$diagnostic){ 
-    derivs=deriv(pars,rt=rt,x=x,N=N,nit=nit,model=model,A=A,W=W,nq=nq,eps=con$eps,delta=con$delta,start=start,constrain=constrain)
+    derivs=deriv(pars,rt=rt,x=x,N=N,nit=nit,model=model,A=A,W=W,nq=nq,eps=con$eps,delta=con$delta,start=start,constrain=constrain,grad=con$grad)
     cat("\nvector of first-order derivatives at parameter estimates:\n")
     print(derivs)
   } else derivs=NULL

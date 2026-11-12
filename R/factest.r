@@ -15,7 +15,7 @@ factest=function(object,start=NULL,se=F, control=list()){
  sd2V=object$par.log[3*nit+2]
  if(!is.null(start) & length(start)!=(2*N))
    stop("If you provide starting values, this vector should be of size 2 x [number of subjects].\n")
- con=list(eps=.01,tol=1e-8,halfwidth=NULL)
+ con=list(eps=if(is.null(object$control$eps)) .01 else object$control$eps,tol=1e-8,halfwidth=NULL)
  con[names(control)]=control
  if(!is.logical(se)) stop("the 'se' argument should be of type logical")
  

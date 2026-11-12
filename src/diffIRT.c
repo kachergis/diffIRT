@@ -16,6 +16,8 @@
  *  5. factest: new FACscore (per-person 1-D Brent search, OpenMP) replaces the
  *     joint N-dimensional BFGS. The prior in LLfacA/LLfacV/FACscore is now a
  *     proper N(0, sd2) density; the original used exp(-.5*P/sqrt(sd2)).
+ *  6. DERdiffAn: analytic gradient (series derivative computed with the
+ *     same terms), selected from R by control$grad (default "analytic").
  *
  *  Original copyright 2013 Dylan Molenaar, University of Amsterdam.
  *  GNU GPL v2 or later.
@@ -356,6 +358,172 @@ void DERdiff(double *y, double *x, int *N, int *nit, int *constrain,
     double g = 0.0;
     for (int i = 0; i < n; i++) g += dL[(size_t)i*P + p];
     deriv[p] = g;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Analytic gradient                                                    */
+/* ------------------------------------------------------------------ */
+
+/* nf_series plus d log p / du, using the same terms (so the derivative   */
+/* is exact for the truncated series between its term-count jumps).      */
+static double nf_series_d(double yy, double eps, double *dlogp)
+{
+  double kl, ks;
+  if ((M_PI * yy * eps) < 1) {
+    kl = sqrt(-2.0 * log(M_PI * yy * eps) / (M_PI * M_PI * yy));
+    if (kl < 1.0 / (M_PI * sqrt(yy))) kl = 1.0 / (M_PI * sqrt(yy));
+  } else kl = 1.0 / (M_PI * sqrt(yy));
+  if ((2.0 * sqrt(2.0 * M_PI * yy) * eps) < 1) {
+    ks = 2.0 + sqrt(-2.0 * yy * log(2.0 * eps * sqrt(2.0 * M_PI * yy)));
+    if (ks < (sqrt(yy) + 1.0)) ks = sqrt(yy) + 1.0;
+  } else ks = 2.0;
+
+  double p = 0.0, dp = 0.0;
+  if (ks < kl) {
+    /* p = S / sqrt(2 pi u^3),  S = sum c exp(-c^2 / 2u) */
+    double S = 0.0, dS = 0.0;
+    for (int k = (int)(-floor((ks-1)/2)); k <= (int)ceil((ks-1)/2); k++) {
+      double c = .5 + 2*k, e = c * exp(-c*c / (2.0*yy));
+      S += e; dS += e * c*c / (2.0*yy*yy);
+    }
+    double nrm = sqrt(2.0 * M_PI * yy * yy * yy);
+    p = S / nrm;
+    dp = dS / nrm - 1.5 * p / yy;
+  } else {
+    int KK = (int)ceil(kl);
+    for (int k = 1; k <= KK; k++) {
+      double e = k * exp(-k*k * M_PI*M_PI * yy / 2.0) * sin(k * M_PI * .5);
+      p += e; dp += e * (-k*k * M_PI*M_PI / 2.0);
+    }
+    p *= M_PI; dp *= M_PI;
+  }
+  *dlogp = dp / p;
+  return p;
+}
+
+/* Gradient of -2 logL with respect to the full parameter vector          */
+/* (ai[1..J], vi[1..J], ter[1..J], sd2A, sd2V), summed into `deriv` by     */
+/* `constrain` (fixed parameters, constrain == 0, are skipped). Same       */
+/* signature as DERdiff; `delta` is unused.                                */
+/*                                                                       */
+/* With posterior node weights w_q = W_q f_q / sum(W f), d logL_i / dθ =   */
+/* sum_q w_q sum_j d log f_ij(q) / dθ. For one response,                   */
+/*   log f = log p(u) - 2 la + v a xm - .5 v^2 t,  u = t / a^2, la = log a  */
+/*   d/dla = -2 u p'/p - 2 + v a xm,  d/dt = p'/p / a^2 - .5 v^2,          */
+/*   d/dv  = a xm - v t.                                                   */
+void DERdiffAn(double *y, double *x, int *N, int *nit, int *constrain,
+               int *npar, double *ai, double *vi, double *sd2A, double *sd2V,
+               double *ter, int *model, double *A, double *W, int *nq,
+               double *epsAlt, double *delta, double *ou, double *LL,
+               double *deriv)
+{
+  int n = *N, J = *nit, Q = *nq, nq2 = Q*Q, P = *npar, K = 3*J + 2, mod = *model;
+  double eps = *epsAlt;
+  double *xter  = (double *)R_alloc(J, sizeof(double));
+  double *nodeA = (double *)R_alloc(Q, sizeof(double));
+  double *nodeV = (double *)R_alloc(Q, sizeof(double));
+  double *logw  = (double *)R_alloc(nq2, sizeof(double));
+  double *logL  = (double *)R_alloc(n, sizeof(double));
+  double *G     = (double *)R_alloc((size_t)n*K, sizeof(double));   /* per-subject d logL */
+  for (int j = 0; j < J; j++) xter[j] = exp(ter[j]);
+  for (int q = 0; q < Q; q++) { nodeA[q] = sqrt(exp(*sd2A))*A[q]; nodeV[q] = sqrt(exp(*sd2V))*A[q]; }
+  for (int a = 0; a < Q; a++) for (int b = 0; b < Q; b++) logw[a*Q+b] = log(W[a]) + log(W[b]);
+
+  #ifdef _OPENMP
+  #pragma omp parallel
+  #endif
+  {
+    /* per (item, boundary node): log p - 2 la, d log p/du, a, u */
+    double *ls = (double *)malloc((size_t)J*Q*sizeof(double));
+    double *dl = (double *)malloc((size_t)J*Q*sizeof(double));
+    double *aa = (double *)malloc((size_t)J*Q*sizeof(double));
+    double *uu = (double *)malloc((size_t)J*Q*sizeof(double));
+    double *lp = (double *)malloc((size_t)nq2*sizeof(double));
+    #ifdef _OPENMP
+    #pragma omp for schedule(static)
+    #endif
+    for (int i = 0; i < n; i++) {
+      double *g = G + (size_t)i*K;
+      for (int k = 0; k < K; k++) g[k] = 0.0;
+      for (int q = 0; q < nq2; q++) lp[q] = 0.0;
+
+      /* pass 1: log density at every node (as item_logf), caching pieces */
+      for (int j = 0; j < J; j++) {
+        double yj = y[i + j*n];
+        if (yj == -999) continue;
+        double t = yj - xter[j], xm = x[i + j*n] - .5;
+        for (int n1 = 0; n1 < Q; n1++) {
+          int c = j*Q + n1;
+          double la = nodeA[n1] - ai[j], a = exp(la), u = t/(a*a), d = 0.0;
+          ls[c] = LOGZERO; aa[c] = a; uu[c] = u;
+          if (u > 0) {
+            double p = nf_series_d(u, eps, &d);
+            if (p > 0 && R_FINITE(p) && R_FINITE(d)) ls[c] = log(p) - 2.0*la;
+          }
+          dl[c] = d;
+          double *l = lp + n1*Q;
+          if (ls[c] == LOGZERO) { for (int n2 = 0; n2 < Q; n2++) l[n2] += LOGZERO; continue; }
+          for (int n2 = 0; n2 < Q; n2++) {
+            double v = (mod == 1) ? (nodeV[n2] - vi[j]) : exp(nodeV[n2] - vi[j]);
+            l[n2] += ls[c] + v*a*xm - .5*v*v*t;
+          }
+        }
+      }
+      double l0 = node_lse(lp, logw, nq2);
+      logL[i] = l0;
+      if (l0 <= LOGFLOOR) continue;          /* floored subject: flat, gradient 0 */
+      for (int q = 0; q < nq2; q++) lp[q] = exp(lp[q] + logw[q] - l0);   /* posterior weights */
+
+      /* pass 2: accumulate weighted derivatives */
+      double gsA = 0.0, gsV = 0.0;
+      for (int j = 0; j < J; j++) {
+        double yj = y[i + j*n];
+        if (yj == -999) continue;
+        double t = yj - xter[j], xm = x[i + j*n] - .5;
+        double gai = 0.0, gvi = 0.0, gt = 0.0;
+        for (int n1 = 0; n1 < Q; n1++) {
+          int c = j*Q + n1;
+          if (ls[c] == LOGZERO) continue;    /* node weight is 0 */
+          double a = aa[c], u = uu[c], d = dl[c];
+          double dla0 = -2.0*u*d - 2.0, dt0 = d/(a*a);
+          const double *w = lp + n1*Q;
+          double sla = 0.0;
+          for (int n2 = 0; n2 < Q; n2++) {
+            double wq = w[n2];
+            if (wq == 0.0) continue;
+            double v = (mod == 1) ? (nodeV[n2] - vi[j]) : exp(nodeV[n2] - vi[j]);
+            double dla = dla0 + v*a*xm, dv = a*xm - v*t, dt = dt0 - .5*v*v;
+            double dvdvi = (mod == 1) ? -1.0 : -v;           /* v = node - vi  or  exp(node - vi) */
+            double dvdsV = (mod == 1) ? .5*nodeV[n2] : .5*v*nodeV[n2];
+            sla += wq*dla;
+            gvi += wq*dv*dvdvi;
+            gt  += wq*dt;
+            gsV += wq*dv*dvdsV;
+          }
+          gai -= sla;                         /* la = nodeA - ai */
+          gsA += sla*.5*nodeA[n1];            /* nodeA = exp(sd2A/2) A */
+        }
+        g[j] = gai; g[J + j] = gvi; g[2*J + j] = -gt*xter[j];   /* t = y - exp(ter) */
+      }
+      g[3*J] = gsA; g[3*J + 1] = gsV;
+    }
+    free(ls); free(dl); free(aa); free(uu); free(lp);
+  }
+
+  double s = 0.0;
+  for (int i = 0; i < n; i++) {
+    s += logL[i];
+    LL[i] = (logL[i] <= LOGFLOOR) ? 1e-300 : exp(logL[i]);
+  }
+  *ou = -2.0 * s;
+  for (int p = 0; p < P; p++) deriv[p] = 0.0;
+  for (int k = 0; k < K; k++) {
+    int p = constrain[k];
+    if (p < 1 || p > P) continue;
+    double gk = 0.0;
+    for (int i = 0; i < n; i++) gk += G[(size_t)i*K + k];
+    deriv[p-1] += -2.0*gk;
   }
 }
 

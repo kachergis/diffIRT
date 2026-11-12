@@ -1,4 +1,4 @@
- likelihood=function(pars,rt,x,N,nit,model,A,W,nq,eps,delta,start,constrain){
+ likelihood=function(pars,rt,x,N,nit,model,A,W,nq,eps,delta,start,constrain,grad="analytic"){
     par=rep(999,3*nit+2)
     par[constrain!=0]=pars[constrain]
     par[constrain==0]=start[constrain==0]

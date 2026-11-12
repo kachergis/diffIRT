@@ -20,7 +20,7 @@ factest(object,start=NULL,se=F, control=list())
   \item{control}{ a list of control values for the estimation. Each person's scores are found
         separately by a one-dimensional Brent search (in parallel when compiled with OpenMP).}
   \describe{
-        \item{eps}{ Precision of the series for the diffusion density. Default .01.}
+        \item{eps}{ Precision of the series for the diffusion density. Default: the value used to fit \code{object}.}
         \item{tol}{ Convergence tolerance of the per-person search. Default 1e-8.}
         \item{halfwidth}{ Half-width of the search interval around each person's starting value.
               Default \code{max(3, 10*sd)}, with sd the estimated population standard deviation of the
