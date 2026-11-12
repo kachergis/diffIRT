@@ -50,6 +50,11 @@ diffIRT(rt, x, model="D", constrain=NULL,
               re-centrings). This removes the downward bias of \code{omega[gamma]} that non-adaptive quadrature with few nodes
               produces (about 13\% at \code{nq=7} with 20 items in simulations), at roughly 2-3 times the computing time. Use at least \code{nq=5}.
               Default \code{TRUE}; \code{FALSE} gives the non-adaptive quadrature of diffIRT 1.5 and earlier.}
+        \item{threads}{ Number of OpenMP threads used for the likelihood and gradient (computed in parallel over
+              subjects). Default \code{NULL}: the OpenMP default (the \code{OMP_NUM_THREADS} environment variable, or all cores).
+              Use \code{threads=1} when calling \code{diffIRT} inside an outer parallel loop or on a shared machine.
+              Estimates do not depend on the number of threads. The setting is restored on exit and is reused by
+              \code{\link{factest}}. Ignored when the package was compiled without OpenMP.}
         \item{method}{ The optimisation method used by \code{\link{optim}}. Default "BFGS".}
         \item{eps}{ Precision with which the infinite integral in the likelihood function is approximated. Default is 1e-6 (earlier versions used 0.01; see \bold{Details}).}
         \item{grad}{ \code{"analytic"} (default) for the exact gradient, or \code{"numeric"} for the

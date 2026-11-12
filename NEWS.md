@@ -172,10 +172,14 @@ below. Where the old behaviour can be restored, the setting is given.
     number of re-centrings (default 10).
   * `grad`: `"analytic"` (default) or `"numeric"`.
   * `restart`: restart threshold in log units (default 5; `Inf` disables).
+  * `threads`: number of OpenMP threads (default `NULL`, the OpenMP default). Use
+    `threads = 1` inside an outer parallel loop. Estimates do not depend on it
+    ([#6](https://github.com/kachergis/diffIRT/issues/6)).
 * `factest(control = list(...))`:
   * `tol`: tolerance of the per-person search (default `1e-8`).
   * `halfwidth`: half-width of the search interval (default `max(3, 10 × SD)`). A
     warning is given when an estimate ends at the edge of the interval.
+  * `threads`: number of OpenMP threads (default: the value used for the fit).
 * `simdiff()`:
   * `omega`: standard deviations of the person parameters (log gamma, and theta or log
     theta), when they are generated.
@@ -256,7 +260,6 @@ Tracked as issues on GitHub:
     ([#4](https://github.com/kachergis/diffIRT/issues/4));
   * person covariates and multiple groups ([#5](https://github.com/kachergis/diffIRT/issues/5)).
 * Planned features:
-  * thread control, `control$threads` ([#6](https://github.com/kachergis/diffIRT/issues/6));
   * EAP scores and plausible values in `factest()` ([#8](https://github.com/kachergis/diffIRT/issues/8));
   * fit statistics for response times, and person fit ([#10](https://github.com/kachergis/diffIRT/issues/10)).
 

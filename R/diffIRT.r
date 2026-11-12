@@ -89,8 +89,9 @@ diffIRT=function(rt, x, model="D", constrain=NULL,start=NULL, se=F, control=list
   s0=s0[constrain!=0]
   pars=s0[!duplicated(constrain[constrain!=0])]
   
-  con=list(nq=c(7),method="BFGS",eps=1e-6,delta=1e-7,grad="analytic",restart=5,adaptive=TRUE,adapttol=.01,maxadapt=10,diagnostic=F,trace=0,fnscale=1,parscale=rep(1,npars),maxit=1999,reltol=sqrt(.Machine$double.eps))
+  con=list(nq=c(7),method="BFGS",eps=1e-6,delta=1e-7,grad="analytic",restart=5,adaptive=TRUE,adapttol=.01,maxadapt=10,diagnostic=F,trace=0,fnscale=1,parscale=rep(1,npars),maxit=1999,reltol=sqrt(.Machine$double.eps),threads=NULL)
   con[names(control)]=control
+  if(!is.null(con$threads)){ oldThreads=setThreads(con$threads); on.exit(setThreads(oldThreads),add=TRUE) }
   if(length(con$nq)==0)
     stop("Invalid number of quadrature points provided")
   

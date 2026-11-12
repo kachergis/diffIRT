@@ -20,6 +20,7 @@
  *     same terms), selected from R by control$grad (default "analytic").
  *  7. Adaptive Gauss-Hermite quadrature (LLdiffAQ, DERdiffAQ, AQmoments):
  *     per-subject grids centred on the posterior; control$adaptive (default TRUE).
+ *  8. diffIRT_threads: control$threads sets the OpenMP thread count from R.
  *
  *  Original copyright 2013 Dylan Molenaar, University of Amsterdam.
  *  GNU GPL v2 or later.
@@ -31,6 +32,42 @@
 #include <R.h>
 #include <Rdefines.h>
 #include <R_ext/Applic.h>
+
+/* ------------------------------------------------------------------ */
+/* OpenMP thread control (control$threads in diffIRT() and factest()).  */
+/* <omp.h> is not included: it clashes with Homebrew libomp headers on   */
+/* macOS, so the two runtime functions are declared directly.           */
+/* ------------------------------------------------------------------ */
+#ifdef _OPENMP
+extern int  omp_get_max_threads(void);
+extern int  omp_get_num_threads(void);
+extern void omp_set_num_threads(int);
+#endif
+
+/* Set the number of threads used by later parallel regions (if *n > 0)  */
+/* and return the previous setting in *old (1 without OpenMP).           */
+void diffIRT_threads(int *n, int *old)
+{
+#ifdef _OPENMP
+  *old = omp_get_max_threads();
+  if (*n > 0) omp_set_num_threads(*n);
+#else
+  *old = 1;
+#endif
+}
+
+/* Number of threads a parallel region actually gets (for tests).        */
+void diffIRT_threads_used(int *used)
+{
+  *used = 1;
+#ifdef _OPENMP
+  #pragma omp parallel
+  {
+    #pragma omp single
+    *used = omp_get_num_threads();
+  }
+#endif
+}
 
 /* ------------------------------------------------------------------ */
 /* Forward declarations                                                 */
