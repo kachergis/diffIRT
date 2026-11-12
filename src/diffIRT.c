@@ -895,16 +895,17 @@ void ddiffQQ(double *y, double *ap, double *ai, double *vp, double *vi,
       p += k * exp(-k*k * M_PI*M_PI * yy / 2.0) * sin(k * M_PI * .5);
     p *= M_PI;
   }
-  int xi = 0;
-  double p0 = p / (aal*aal) * exp(exl*aal*(xi-.5) - .5*exl*exl*(*y-*ter));
-  xi = 1;
-  double p1 = p / (aal*aal) * exp(exl*aal*(xi-.5) - .5*exl*exl*(*y-*ter));
-  *ou = p0 + p1;
+  /* density of both responses, in log space: exp(exl*aal/2) alone overflows */
+  /* for large drift and boundary, although the product with exp(-exl^2 t/2) */
+  /* is small                                                                */
+  if (!(p > 0)) { *ou = 0.0; return; }
+  double lb = log(p) - 2.0*log(aal) - .5*exl*exl*(*y-*ter);
+  *ou = exp(lb - .5*exl*aal) + exp(lb + .5*exl*aal);
 }
 
 
 /* ------------------------------------------------------------------ */
-/* mdiffQQ  (unchanged)                                                 */
+/* mdiffQQ: marginal RT density of one item (both responses)           */
 /* ------------------------------------------------------------------ */
 void mdiffQQ(double *y, int *N, double *ai, double *vi, double *sd2A,
              double *sd2V, double *ter, int *model, double *A, double *W,
@@ -924,7 +925,8 @@ void mdiffQQ(double *y, int *N, double *ai, double *vi, double *sd2A,
       }
       tmp += ou * W[n1] * W[n2];
     }
-    D[i] = (tmp == 0.0 || !R_FINITE(tmp)) ? -999.0 : tmp;
+    /* (was -999 for a zero density, which pdiffIRT then integrated as a value) */
+    D[i] = R_FINITE(tmp) ? tmp : NA_REAL;
   }
 }
 
@@ -972,6 +974,10 @@ void makeT(int *nit, double *design, int *dim, int *r, double *T)
 /*              integrate over boundary nodes.                          */
 /* Outputs: est[i], hess[i] (numerical 2nd derivative of -2 log post),  */
 /* conv[i] (0 = interior optimum, 1 = at search-interval edge).         */
+/* adapt = 1: integrate over the other latent variable with each        */
+/* subject's adaptive grid (muO[i] + sO[i] * A, with prior/proposal     */
+/* weights and the scale capped at the prior SD, as in aq_subject);     */
+/* adapt = 0: the non-adaptive grid sd * A.                             */
 /* ------------------------------------------------------------------ */
 
 typedef struct {
@@ -1068,22 +1074,23 @@ static double brent_min(double lo, double hi, double (*fn)(double, void *), void
 void FACscore(double *y, double *x, int *N, int *nit, double *ai, double *vi,
               double *sd2A, double *sd2V, double *ter, int *which, int *model,
               double *A, double *W, int *nq, double *epsAlt, double *start,
-              double *halfwidth, double *tol, double *est, double *hess, int *conv)
+              double *halfwidth, double *tol, int *adapt, double *muO, double *sO,
+              double *est, double *hess, int *conv)
 {
   int n = *N, J = *nit, Q = *nq;
   double *xter = (double *)R_alloc(J, sizeof(double));
-  double *node = (double *)R_alloc(Q, sizeof(double));
-  double *logw = (double *)R_alloc(Q, sizeof(double));
   for (int j = 0; j < J; j++) xter[j] = exp(ter[j]);
-  /* integrate over the *other* latent variable's nodes */
-  double sdOther = sqrt(exp(*which == 1 ? *sd2V : *sd2A));
-  for (int q = 0; q < Q; q++) { node[q] = sdOther*A[q]; logw[q] = log(W[q]); }
+  /* integrate over the *other* latent variable */
+  double s2O = exp(*which == 1 ? *sd2V : *sd2A), sdOther = sqrt(s2O);
+  int deg = !(s2O > 0);
 
   #ifdef _OPENMP
   #pragma omp parallel
   #endif
   {
     facinfo f;
+    double *node = (double *)malloc((size_t)Q*sizeof(double));
+    double *logw = (double *)malloc((size_t)Q*sizeof(double));
     f.y = y; f.x = x; f.ai = ai; f.vi = vi; f.xter = xter; f.node = node; f.logw = logw;
     f.N = n; f.nit = J; f.nq = Q; f.model = *model; f.which = *which;
     f.sd2A = *sd2A; f.sd2V = *sd2V; f.eps = *epsAlt;
@@ -1095,6 +1102,15 @@ void FACscore(double *y, double *x, int *N, int *nit, double *ai, double *vi,
     #endif
     for (int i = 0; i < n; i++) {
       f.i = i;
+      if (*adapt && !deg) {
+        double s = (sO[i] > sdOther || !(sO[i] > 0)) ? sdOther : sO[i];
+        for (int q = 0; q < Q; q++) {
+          node[q] = muO[i] + s*A[q];
+          logw[q] = log(W[q]) + log(s) - .5*log(s2O) - node[q]*node[q]/(2.0*s2O) + .5*A[q]*A[q];
+        }
+      } else {
+        for (int q = 0; q < Q; q++) { node[q] = deg ? 0.0 : sdOther*A[q]; logw[q] = log(W[q]); }
+      }
       if (f.which == 2) {            /* series depends only on the boundary node: cache it */
         for (int j = 0; j < J; j++) {
           double yj = y[i + j*n];
@@ -1118,6 +1134,6 @@ void FACscore(double *y, double *x, int *N, int *nit, double *ai, double *vi,
       hess[i] = (fac_obj(b + h, &f) - 2.0*fac_obj(b, &f) + fac_obj(b - h, &f))/(h*h);
       conv[i] = (b - lo < 1e-3*(*halfwidth) || hi - b < 1e-3*(*halfwidth)) ? 1 : 0;
     }
-    free(f.lp); free(f.ls); free(f.a);
+    free(f.lp); free(f.ls); free(f.a); free(node); free(logw);
   }
 }

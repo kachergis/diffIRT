@@ -25,6 +25,9 @@ factest(object,start=NULL,se=F, control=list())
         \item{halfwidth}{ Half-width of the search interval around each person's starting value.
               Default \code{max(3, 10*sd)}, with sd the estimated population standard deviation of the
               latent variable. A warning is given when estimates end at the edge of the interval.}
+        \item{adaptive}{ Logical; if the model was fitted with adaptive quadrature (the default in \code{\link{diffIRT}}),
+              integrate over the other latent variable on each person's adaptive grid and start each search at the
+              person's posterior mean. Default \code{TRUE}; \code{FALSE} uses the non-adaptive grid.}
     }
   }
 

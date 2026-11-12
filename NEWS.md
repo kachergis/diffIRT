@@ -20,6 +20,7 @@ below. Where the old behaviour can be restored, the setting is given.
 | Standard errors in models with equality or fixed constraints | All SEs change (each was scaled by the wrong parameter) | — |
 | `vcov()` | Twice as large (it was half the covariance matrix) | — |
 | `factest()` prior | Factor scores change, mostly for theta; scores of about 8% of persons no longer collapse to theta ≈ 0 in the Q model | — |
+| `factest()` uses each person's adaptive grid | Scores and SEs more accurate: with 20 items, theta scores moved by up to 0.19 and SEs by up to 37% relative to a 61-point reference; now within ~1e-3 | `factest(control = list(adaptive = FALSE))` |
 | `RespFit()` | Mr changes for the Q model; df changes for both models; p-values change | — |
 | Input validation | Data that were silently accepted now give an error (responses other than 0/1/NA, non-positive RTs) | Recode the data |
 
@@ -80,6 +81,13 @@ below. Where the old behaviour can be restored, the setting is given.
   simulation (N = 200, 20 items), theta's correlation with the true values rose from
   .854 to .870 (D) and from .554 to .614 (Q). Individual theta scores move by up to
   about 0.7 (D) and 0.9 (Q). Gamma scores are essentially unchanged.
+
+* **`factest()` with adaptive grids.** When the model was fitted with adaptive
+  quadrature (the default), `factest()` integrates over the other latent variable on
+  each person's adaptive grid and starts each search at the person's posterior mean.
+  Compared with a 61-point grid (500 persons, 20 items), the scores agree to about
+  1e-4 and the SEs to 0.3%. With the non-adaptive 7-point grid, theta scores were off
+  by up to 0.19 and SEs by up to 37%. The cost is unchanged.
 
 * **`RespFit()` (Mr test).**
   * **Q-model derivatives.** `fitDeriv` tested `toupper(model) == "Q"`, which is never
@@ -147,6 +155,12 @@ below. Where the old behaviour can be restored, the setting is given.
 * **`RespFit()`** now warns that missing responses are counted as incorrect in the
   observed moments. `print` and `summary` show the order actually used instead of
   always "Order 2".
+* **Predicted RT density (`QQdiff()`).** The density computed exp(v·a/2) before
+  multiplying by exp(−v²t/2), which overflows to Inf on the extreme nodes of a fine
+  grid. It returned −999 where the density is 0, which `pdiffIRT` would then integrate
+  as a value. The density is now computed on the log scale and returns 0. With the
+  default 7-point grid neither problem showed up in practice: densities integrate to 1,
+  as before.
 * **`benchmark.R`** passed `-fopenmp` only to the linker, so its "OpenMP" build ran
   serially.
 
@@ -205,8 +219,11 @@ below. Where the old behaviour can be restored, the setting is given.
 
 Tracked as issues on GitHub:
 
-* `factest()`, `QQdiff()` and `RespFit()` still use non-adaptive quadrature
-  ([#7](https://github.com/kachergis/diffIRT/issues/7)).
+* `QQdiff()` and `RespFit()` integrate population-level quantities over the prior,
+  where the non-adaptive 7-point grid is accurate: the predicted RT density is within
+  0.1% of a 61-point grid, and the `RespFit()` moments within 0.001
+  ([#7](https://github.com/kachergis/diffIRT/issues/7), resolved together with
+  adaptive grids in `factest()`).
 * `RespFit()` counts missing responses as incorrect, with a warning ([#11](https://github.com/kachergis/diffIRT/issues/11)).
 * `QQdiff()` computes one quantile per person by default, each by root-finding on a
   numerical integral, so it can be slow for large N ([#12](https://github.com/kachergis/diffIRT/issues/12)).
