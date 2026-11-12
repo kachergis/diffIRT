@@ -15,7 +15,7 @@ factest=function(object,start=NULL,se=F, control=list()){
  sd2V=object$par.log[3*nit+2]
  if(!is.null(start) & length(start)!=(2*N))
    stop("If you provide starting values, this vector should be of size 2 x [number of subjects].\n")
- con=list(method="BFGS",eps=.01,delta=1e-2,trace=0,fnscale=1,parscale=rep(1,2*N),maxit=19999,reltol=sqrt(.Machine$double.eps))
+ con=list(eps=if(is.null(object$control$eps)) .01 else object$control$eps,tol=1e-8,halfwidth=NULL)
  con[names(control)]=control
  if(!is.logical(se)) stop("the 'se' argument should be of type logical")
  
@@ -39,33 +39,37 @@ factest=function(object,start=NULL,se=F, control=list()){
    pars=c(apstart,vpstart)
   if(!is.null(start)) pars[!is.na(start)]=start[!is.na(start)]
 
-   resA=optim(pars[1:N],fn=LLscoreA,
-      rt=rt,x=x,N=N,nit=nit,ai=ai,vi=vi,ter=ter,sd2A=sd2A,sd2V=sd2V,model=model,A=A,W=W,nq=nq,eps=con$eps,delta=con$delta,
-      method="BFGS",control=list(trace=con$trace,fnscale=con$fnscale,maxit=con$maxit,reltol=con$reltol),hessian=se)
-   if(resA$convergence!=0) stop("Convergence problems. Optim error code: ",resA$convergence,"\n") else parA=exp(resA$par)
-
-  if(model==1){
-   resV=optim(pars[(N+1):(2*N)],fn=LLscoreVd,
-    rt=rt,x=x,N=N,nit=nit,ai=ai,vi=vi,ter=ter,sd2A=sd2A,sd2V=sd2V,model=model,A=A,W=W,nq=nq,eps=con$eps,delta=con$delta,
-    method="BFGS",control=list(trace=con$trace,fnscale=con$fnscale,maxit=con$maxit,reltol=con$reltol),hessian=F)
-  if(resV$convergence!=0) stop("Convergence problems. Optim error code: ",resV$convergence,"\n") else parV=resV$par
+  # Each person's score is a separate 1-D problem (the old joint BFGS over all N
+  # parameters scaled as N^2). FACscore minimizes each subject's term of the
+  # LLfacA / LLfacV objective with Brent's method, in parallel (see src/diffIRT.c).
+  fac = function(which, st, hw) {
+    st = as.double(st); st[!is.finite(st)] = 0
+    r = .C("FACscore", as.double(rt), as.double(x), as.integer(N), as.integer(nit), as.double(ai),
+           as.double(vi), as.double(sd2A), as.double(sd2V), as.double(ter), as.integer(which),
+           as.integer(model), as.double(A), as.double(W), as.integer(nq), as.double(con$eps),
+           st, as.double(hw), as.double(con$tol), est=double(N), hess=double(N), conv=integer(N))
+    if (any(r$conv != 0))
+      warning(sum(r$conv != 0), " subject(s) have a ", c("gamma", "theta")[which],
+              " estimate at the edge of the search interval; consider a larger control$halfwidth.")
+    r
   }
-  if(model==2){
-   resV=optim((pars[(N+1):(2*N)]),fn=LLscoreVq,
-   rt=rt,x=x,N=N,nit=nit,ai=ai,vi=vi,ter=ter,sd2A=sd2A,sd2V=sd2V,model=model,A=A,W=W,nq=nq,eps=con$eps,delta=con$delta,
-   method="BFGS",control=list(trace=con$trace,fnscale=con$fnscale,maxit=con$maxit,reltol=con$reltol),hessian=F)
-  if(resV$convergence!=0) stop("Convergence problems. Optim error code: ",resV$convergence,"\n") else parV=exp(resV$par)
-  }   
+  hwA = if (is.null(con$halfwidth)) max(3, 10*sqrt(exp(sd2A))) else con$halfwidth
+  hwV = if (is.null(con$halfwidth)) max(3, 10*sqrt(exp(sd2V))) else con$halfwidth
+  resA = fac(1, pars[1:N], hwA)
+  resV = fac(2, pars[(N+1):(2*N)], hwV)
+  parA = exp(resA$est)
+  parV = if (model == 2) exp(resV$est) else resV$est
+
   ret=matrix(c(parA,parV),N,2)
   dimnames(ret)[[2]]=c("gamma[p]","theta[p]")
   if(se) {
-    varA=matrix((diag(solve(resA$hessian))),N,1)
-    varV=matrix((diag(solve(resV$hessian))),N,1)
-    var=cbind(varA,varV) 
-    var[,1]=ret[,1]^2*var[,1]
-    if(model==2) var=ret^2*var
-    dimnames(var)[[2]]=c("gamma[p].se","theta[p].se")
-    ret=cbind(ret[,1],sqrt(var[,2]),ret[,2],sqrt(var[,2]))
+    # objective is -2 log posterior, so var = 2 / second derivative; delta method for exp()
+    varA = 2/resA$hess
+    varV = 2/resV$hess
+    seA = parA*sqrt(varA)
+    seV = if (model == 2) parV*sqrt(varV) else sqrt(varV)
+    ret = cbind(parA, seA, parV, seV)
+    dimnames(ret)[[2]] = c("gamma[p]","gamma[p].se","theta[p]","theta[p].se")
   }
   return(ret)
   }

@@ -27,6 +27,13 @@ diffIRT=function(rt, x, model="D", constrain=NULL,start=NULL, se=F, control=list
   rt=as.matrix(rt)
   if(sum((dim(rt)==dim(x))*1)!=2)
     stop("The matrix of response times should be of same size as the matrix of responses\n")
+  if(any(!is.na(x) & x!=0 & x!=1))
+    stop("Responses in 'x' should be coded 0 (incorrect) or 1 (correct), with NA for missing.\n")
+  if(any(!is.na(rt) & rt<=0))
+    stop("Response times in 'rt' should be positive (use NA for missing).\n")
+  allmiss=which(rowSums(!is.na(rt) & !is.na(x))==0)
+  if(length(allmiss)>0)
+    stop("Subject(s) ",paste(allmiss,collapse=", ")," have no observed responses on any item; remove them before fitting.\n")
   N=nrow(rt)
   nit=ncol(rt)
   if(toupper(model)!="D" & toupper(model)!="Q" )
@@ -82,12 +89,11 @@ diffIRT=function(rt, x, model="D", constrain=NULL,start=NULL, se=F, control=list
   s0=s0[constrain!=0]
   pars=s0[!duplicated(constrain[constrain!=0])]
   
-  con=list(nq=c(7),method="BFGS",eps=.01,delta=1e-7,diagnostic=F,trace=0,fnscale=1,parscale=rep(1,npars),maxit=1999,reltol=sqrt(.Machine$double.eps))
+  con=list(nq=c(7),method="BFGS",eps=1e-6,delta=1e-7,grad="analytic",restart=5,adaptive=TRUE,adapttol=.01,maxadapt=10,diagnostic=F,trace=0,fnscale=1,parscale=rep(1,npars),maxit=1999,reltol=sqrt(.Machine$double.eps))
   con[names(control)]=control
   if(length(con$nq)==0)
     stop("Invalid number of quadrature points provided")
   
-  if(length(complete.cases(rt))!=N | length(complete.cases(x))!=N ) stop("One or more of the subjects has missings on all items.")
   rt[is.na(rt)]=-999
   rt[is.na(x)]=-999
   x[is.na(x)]=-999
@@ -110,6 +116,7 @@ diffIRT=function(rt, x, model="D", constrain=NULL,start=NULL, se=F, control=list
   colnames(hist)=nms
   rownames(hist)=c("start",paste("nq",con$nq,sep=""))
     
+  aq=NULL
   for(i in 1:length(con$nq)){
     nq=con$nq[i]
     gauss.quad(nq,kind="hermite")->Quad
@@ -117,10 +124,60 @@ diffIRT=function(rt, x, model="D", constrain=NULL,start=NULL, se=F, control=list
     Quad$nodes*sqrt(2)->A
     hess=F
     if(i==length(con$nq) & se==T) hess=T
-    res=optim(pars,fn=likelihood,gr=deriv,rt=rt,x=x,N=N,nit=nit,model=model,A=A,W=W,nq=nq,eps=con$eps,delta=con$delta,start=start,constrain=constrain,method=con$method,
-        control=list(trace=con$trace,fnscale=con$fnscale,parscale=con$parscale,maxit=con$maxit,reltol=con$reltol),hessian=hess)
+    fit1=function(p) optim(p,fn=likelihood,gr=deriv,rt=rt,x=x,N=N,nit=nit,model=model,A=A,W=W,nq=nq,eps=con$eps,delta=con$delta,start=start,constrain=constrain,grad=con$grad,aq=aq,method=con$method,
+        control=list(trace=con$trace,fnscale=con$fnscale,parscale=con$parscale,maxit=con$maxit,reltol=con$reltol))
+    # BFGS can drift along a valley until a parameter is far out on the log scale (e.g. a
+    # variance -> 0 or an item drift -> 0). There its gradient vanishes, so optim stops
+    # early and reports convergence. Restart with such parameters reset to their starting
+    # values, and keep the restart only if it fits better.
+    rescue=function(res,f){
+      for(r in 1:2){
+        far=which(abs(res$par-hist[1,1:npars])>con$restart)
+        if(length(far)==0 | res$convergence!=0) break
+        p2=res$par; p2[far]=hist[1,far]
+        aq0=aq
+        res2=f(p2)
+        res2$counts=res2$counts+res$counts
+        if(res2$convergence!=0 | res2$value>=res$value-1e-6){ aq<<-aq0; break }
+        cat("Restarted the optimizer after parameter(s)",paste(nms[far],collapse=", "),"drifted far from their starting values; -2LL improved by",
+            round(res$value-res2$value,3),"\n")
+        res=res2
+      }
+      res
+    }
+    if(con$adaptive){
+      # Adaptive Gauss-Hermite quadrature: each subject's grid is centred and scaled on
+      # their posterior for log boundary and drift. The grid is held fixed while optim
+      # runs, then re-centred at the new estimates; repeat until -2LL settles.
+      moments=function(p) aqMoments(p,rt=rt,x=x,N=N,nit=nit,model=model,A=A,W=W,nq=nq,eps=con$eps,start=start,constrain=constrain,aq=aq)
+      adapt=function(p){
+        cnt=c(0,0); prev=NA
+        for(cyc in 1:con$maxadapt){
+          for(k in 1:2) aq<<-moments(p)   # moments on the previous grid are approximate: re-centre twice
+          r=fit1(p); cnt=cnt+r$counts
+          if(r$convergence!=0) break
+          p=r$par
+          if(!is.na(prev) && abs(r$value-prev)<con$adapttol) break
+          prev=r$value
+        }
+        r$counts=cnt; r
+      }
+      # Start with a (cheap) non-adaptive fit, including its restart check, so the first
+      # adaptive grids are centred near the answer. Grids centred on a collapsed variance
+      # are capped at that variance and cannot recover from it, so a restart rebuilds them.
+      fit=function(p){
+        aq<<-NULL
+        r=rescue(fit1(p),fit1)
+        if(r$convergence!=0) return(r)
+        r2=adapt(r$par); r2$counts=r2$counts+r$counts; r2
+      }
+      res=if(is.null(aq)) fit(pars) else adapt(pars)   # later nq stages reuse the grids
+      res=rescue(res,fit)
+    } else res=rescue(fit1(pars),fit1)
     if(res$convergence!=0) stop("Convergence problems. Optim error code: ",res$convergence,"\n")
     else pars=res$par
+    if(hess) res$hessian=optimHess(pars,likelihood,deriv,rt=rt,x=x,N=N,nit=nit,model=model,A=A,W=W,nq=nq,eps=con$eps,delta=con$delta,
+        start=start,constrain=constrain,grad=con$grad,aq=aq,control=list(fnscale=con$fnscale,parscale=con$parscale))
     hist[i+1,1:npars]=pars
     hist[i+1,npars+1]=res$value
     hist[i+1,npars+2]=res$convergence
@@ -128,9 +185,9 @@ diffIRT=function(rt, x, model="D", constrain=NULL,start=NULL, se=F, control=list
     hist[i+1,npars+4]=res$counts[2]
   }
 
-  subjLL=calcSubjLL(pars,rt=rt,x=x,N=N,nit=nit,model=model,A=A,W=W,nq=nq,eps=con$eps,delta=con$delta,start=start,constrain=constrain)
+  subjLL=calcSubjLL(pars,rt=rt,x=x,N=N,nit=nit,model=model,A=A,W=W,nq=nq,eps=con$eps,delta=con$delta,start=start,constrain=constrain,aq=aq)
   if(con$diagnostic){ 
-    derivs=deriv(pars,rt=rt,x=x,N=N,nit=nit,model=model,A=A,W=W,nq=nq,eps=con$eps,delta=con$delta,start=start,constrain=constrain)
+    derivs=deriv(pars,rt=rt,x=x,N=N,nit=nit,model=model,A=A,W=W,nq=nq,eps=con$eps,delta=con$delta,start=start,constrain=constrain,grad=con$grad,aq=aq)
     cat("\nvector of first-order derivatives at parameter estimates:\n")
     print(derivs)
   } else derivs=NULL
@@ -145,14 +202,19 @@ diffIRT=function(rt, x, model="D", constrain=NULL,start=NULL, se=F, control=list
   if(model==2) par[(nit+1):(2*nit)]=exp(par.log[(nit+1):(2*nit)])
   par[c(3*nit+1,3*nit+2)]=sqrt(par[c(3*nit+1,3*nit+2)])
   if(se){
+    # hessian is of -2LL, so the covariance of the free (internal-scale) parameters is solve(.5*H).
     var.log=diag(solve(.5*res$hessian))
-    var=var.log
     hessian=res$hessian
-    var[c(1:nit,(2*nit+1):(3*nit+2))]= par[c(1:nit,(2*nit+1):(3*nit+2))]^2 * var.log[c(1:nit,(2*nit+1):(3*nit+2))]
-    if(model==2) var[(nit+1):(2*nit)]= par[(nit+1):(2*nit)]^2 * var.log[(nit+1):(2*nit)]
-    var[c(3*nit+1,3*nit+2)]=.5/par[c(3*nit+1,3*nit+2)]*var[c(3*nit+1,3*nit+2)]
+    # Delta method, d(reported)/d(internal) for each parameter: a, Ter (and v in the Q model)
+    # are exp(internal); omega = exp(internal/2), with internal = log(omega^2).
+    # var.log is indexed by free parameter, so look up one full-vector index per free parameter.
+    jac=rep(1,3*nit+2)
+    jac[c(1:nit,(2*nit+1):(3*nit))]=par[c(1:nit,(2*nit+1):(3*nit))]
+    if(model==2) jac[(nit+1):(2*nit)]=par[(nit+1):(2*nit)]
+    jac[c(3*nit+1,3*nit+2)]=par[c(3*nit+1,3*nit+2)]/2
+    var=jac[match(1:npars,constrain)]^2*var.log
     std.err=rep(-999,3*nit+2)
-    std.err[constrain!=0]=sqrt(var[constrain])
+    std.err[constrain!=0]=sqrt(var[constrain[constrain!=0]])
   } else { 
         std.err=NULL
         hessian=NULL
@@ -166,7 +228,7 @@ diffIRT=function(rt, x, model="D", constrain=NULL,start=NULL, se=F, control=list
   x[x==-999]=NA
   diffRES=list(model=model,N=N,nit=nit,rt=rt,score=x,start.val=s0[!duplicated(constrain[constrain!=0])],par=par,par.log=par.log,se=se,
   std.err=std.err,hessian=hessian,totLL=res$value, npars=npars,AIC=AIC,BIC=BIC,sBIC=sBIC,DIC=DIC,subjLL=subjLL,hist=hist,
-  nq=nq,conv=res$convergence,nr_fail=nr_fail,gradient=derivs,constrain=constrain,control=con,W=W, A=A)
+  nq=nq,aq=aq,conv=res$convergence,nr_fail=nr_fail,gradient=derivs,constrain=constrain,control=con,W=W, A=A)
   class(diffRES)<-"diffIRT"
   return(diffRES)
 }

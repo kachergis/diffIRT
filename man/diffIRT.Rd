@@ -44,9 +44,21 @@ diffIRT(rt, x, model="D", constrain=NULL,
           using the number of quadratures points specified in the first element. When converged, the resulting parameter estimates will be used as 
           starting values in a new optimisation using the number of quadrature points from the second element. This process continues until the
           end of vector \code{nq} is reached. Default is c(7).}
+        \item{adaptive}{ Logical; use adaptive Gauss-Hermite quadrature. Each subject's grid is centred and scaled on
+              their posterior distribution of log boundary separation and drift, and the grids are re-centred between
+              optimizer runs until -2LL changes by less than \code{adapttol} (default .01; at most \code{maxadapt}, default 10,
+              re-centrings). This removes the downward bias of \code{omega[gamma]} that non-adaptive quadrature with few nodes
+              produces (about 13\% at \code{nq=7} with 20 items in simulations), at roughly 2-3 times the computing time. Use at least \code{nq=5}.
+              Default \code{TRUE}; \code{FALSE} gives the non-adaptive quadrature of diffIRT 1.5 and earlier.}
         \item{method}{ The optimisation method used by \code{\link{optim}}. Default "BFGS".}
-        \item{eps}{ Precision with which the infinite integral in the likelihood function is approximated. Default is 0.01. See \bold{Details}.}
-        \item{delta}{ Precision used in the finite difference approximation of the gradient. Default is 1e-7.}
+        \item{eps}{ Precision with which the infinite integral in the likelihood function is approximated. Default is 1e-6 (earlier versions used 0.01; see \bold{Details}).}
+        \item{grad}{ \code{"analytic"} (default) for the exact gradient, or \code{"numeric"} for the
+              forward-difference gradient used by earlier versions (only with \code{adaptive=FALSE}).}
+        \item{restart}{ If a free parameter ends more than \code{restart} units (on the log scale used internally) from its
+              starting value, the optimizer is restarted from the estimates with that parameter reset to its starting value,
+              and the restart is kept if -2LL improves (at most twice). This catches fits in which a variance or item drift runs
+              off towards 0 or infinity, where its gradient vanishes and the optimizer stops early. Default 5; \code{Inf} disables it.}
+        \item{delta}{ Step size of the forward-difference gradient (only used when \code{grad="numeric"}). Default is 1e-7.}
         \item{trace}{ See \code{\link{optim}} for details and default.}
         \item{fnscale}{ See \code{\link{optim}} for details and default.}
         \item{parscale}{ See \code{\link{optim}} for details and default.}
@@ -76,7 +88,10 @@ diffIRT(rt, x, model="D", constrain=NULL,
     responses and response times is evaluated using the approach 
     by Navarro & Fuss (2009). In this approach, the infinite sum in the density function
     of the diffusion model is being approximated with a maximum discrepancy of \code{epsilon}. This discrepancy can be
-    set using the \code{eps} setting within the \code{control} argument. To facilitated numerical estimation, the natural logarithm 
+    set using the \code{eps} setting within the \code{control} argument. Because the number of terms changes with
+    the response time and parameters, the truncated sum makes the likelihood jump slightly; with \code{eps=0.01}
+    (the default in diffIRT 1.5 and earlier) these jumps occasionally stopped the optimizer short of the maximum. With the default
+    1e-6, -2LL is about 2 higher than with 0.01 (it is more accurate), while estimates change by less than 0.01. To facilitated numerical estimation, the natural logarithm 
     of the parameters that are strictly positive are estimated (i.e., \code{log(a[i])}, \code{log(Ter[i])}, 
     \code{log(omega[gamma])}, \code{log(omega[theta])}, and \code{log(v[i])} in the Q-diffusion model). However, in the output 
     the parameters are transformed back to their original scale. In addition, if \code{se=T}, 

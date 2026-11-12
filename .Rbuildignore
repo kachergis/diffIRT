@@ -1,0 +1,9 @@
+^src_orig$
+^benchmark\.R$
+^sim$
+^extra$
+^manual\.pdf$
+^Rplots\.pdf$
+^LICENSE$
+^\.DS_Store$
+^.*\.Rproj$

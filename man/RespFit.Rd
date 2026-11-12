@@ -25,12 +25,17 @@ RespFit(object, order=2)
   \code{order} is chosen to be small (e.g., 1 or 2).}
 
 \note{
-The degrees of freedom for the test statistic differ between the D-diffusion and Q-diffusion model as for the 
-Q-diffusion model, \eqn{a[i]} and \eqn{v[i]} are not simultaneously identified in response data only. See Molenaar, Tuerlinckx, & van der Maas (2013) 
-for more details.}
+The degrees of freedom are the number of moments minus the number of parameter combinations that the responses
+identify, i.e. the rank of the matrix of derivatives of the moments with respect to the free parameters. Response
+data alone do not identify every parameter: in the D-diffusion model the scale of the drift is free (2 x items + 1
+identified combinations without constraints); in the Q-diffusion model accuracy depends only on \eqn{a[i] v[i]} and on
+\eqn{omega[gamma]^2 + omega[theta]^2} (items + 1). See Molenaar, Tuerlinckx, & van der Maas (2013) for more details.
 
-\section{Warning}{ 
-For large numbers of items, this test becomes computationally infeasible.}
+The moments, their covariance matrix and their derivatives are computed directly from joint probabilities of at most
+2 x \code{order} items, so the test is feasible for long tests (about 1 s for 20 items and 11 s for 40 items with
+\code{order=2}). diffIRT 1.5 and earlier enumerated all 2^\code{nit} response patterns (infeasible beyond about 14
+items). Their Q-model derivatives were wrong (the item drifts were left on the log scale), and their df
+subtracted 2 more than the number of estimated parameters, so their Mr values and p-values differ from the current ones.}
 
 \value{
   Returns an object of class \code{RespFit} with entries:

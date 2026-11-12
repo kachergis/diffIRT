@@ -1,6 +1,7 @@
 get.start=function(rt,x,constrain,start,model){
   N=nrow(rt)
   nit=ncol(rt)
+  minrt=apply(rt,2,min,na.rm=T)
   ou=matrix(,N,3)  
   
  pc= apply(x,2,mean,na.rm=T)
@@ -26,10 +27,16 @@ if(identical(apply((!is.na(x))*1,1,sum),rep(1,nrow(x)))){
           else ter.s[i]=xx[[3]]
         }
       
-        ter.s[ter.s<0]=1
+        # Ter must start below each item's fastest RT, or those responses have zero density.
+        # (Previously a negative EZ estimate was replaced by 1, which can exceed the fastest RT.)
+        bad=!is.finite(ter.s) | ter.s<=0 | ter.s>=minrt
+        ter.s[bad]=minrt[bad]/2
         strt=strt2=c(ai.s,vi.s,ter.s,sap,svp)
       
         for(i in unique(constrain)) strt2[which(constrain==i)]=mean(strt[which(constrain==i)])
+        tix=(2*nit+1):(3*nit)
+        for(i in setdiff(unique(constrain[tix]),0)) { k=tix[constrain[tix]==i]; m=min(minrt[k-2*nit])
+          if(strt2[k[1]]>=m) strt2[k]=m/2 }
         
         if(strt2[(3*nit+1)]<0) strt2[(3*nit+1)]=0   #this will happen in the case that both vi and sap or svp are fixed 
         if(strt2[(3*nit+1)]<0) strt2[(3*nit+2)]=0
@@ -74,10 +81,16 @@ if(identical(apply((!is.na(x))*1,1,sum),rep(1,nrow(x)))){
           else ter.s[i]=xx[[3]]
         }
       
-        ter.s[ter.s<0]=1
+        # Ter must start below each item's fastest RT, or those responses have zero density.
+        # (Previously a negative EZ estimate was replaced by 1, which can exceed the fastest RT.)
+        bad=!is.finite(ter.s) | ter.s<=0 | ter.s>=minrt
+        ter.s[bad]=minrt[bad]/2
         strt=strt2=c(ai.s,vi.s,ter.s,sap,svp)
       
         for(i in unique(constrain)) strt2[which(constrain==i)]=mean(strt[which(constrain==i)])
+        tix=(2*nit+1):(3*nit)
+        for(i in setdiff(unique(constrain[tix]),0)) { k=tix[constrain[tix]==i]; m=min(minrt[k-2*nit])
+          if(strt2[k[1]]>=m) strt2[k]=m/2 }
         
         if(strt2[(3*nit+1)]<0) strt2[(3*nit+1)]=0   #this will happen in the case that both vi and sap or svp are fixed 
         if(strt2[(3*nit+1)]<0) strt2[(3*nit+2)]=0
@@ -99,10 +112,16 @@ if(identical(apply((!is.na(x))*1,1,sum),rep(1,nrow(x)))){
           else ter.s[i]=xx[[3]]
         }
       
-        ter.s[ter.s<0]=1
+        # Ter must start below each item's fastest RT, or those responses have zero density.
+        # (Previously a negative EZ estimate was replaced by 1, which can exceed the fastest RT.)
+        bad=!is.finite(ter.s) | ter.s<=0 | ter.s>=minrt
+        ter.s[bad]=minrt[bad]/2
         strt=strt2=c(ai.s,vi.s,ter.s,1,1)
       
         for(i in unique(constrain)) strt2[which(constrain==i)]=mean(strt[which(constrain==i)])
+        tix=(2*nit+1):(3*nit)
+        for(i in setdiff(unique(constrain[tix]),0)) { k=tix[constrain[tix]==i]; m=min(minrt[k-2*nit])
+          if(strt2[k[1]]>=m) strt2[k]=m/2 }
       
         if(model==2) strt2=log(strt2)
         if(model==1) strt2[-((nit+1):(2*nit))]=log(strt2[-((nit+1):(2*nit))])

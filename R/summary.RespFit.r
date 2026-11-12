@@ -2,7 +2,7 @@ summary.RespFit=function(object,...){
   cat("\n")
   cat(if(toupper(object$model)==2) "Q-diffusion" else "D-diffusion","Model Fit of Responses\n")
   cat("---------------------------------\n")
-  cat("Maydeu-Olivares & Joe Test of Order 2\n\n")
+  cat("Maydeu-Olivares & Joe Test of Order",object$order,"\n\n")
 
   cat("Univariate Statistics\n")
   print(object$Z)

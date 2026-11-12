@@ -13,6 +13,13 @@
  *     Note: on macOS the default Apple toolchain has no OpenMP; the code then
  *     runs serially. src/Makevars uses $(SHLIB_OPENMP_CFLAGS).
  *  4. Hoisted loop invariants in LLfacA / LLfacV.
+ *  5. factest: new FACscore (per-person 1-D Brent search, OpenMP) replaces the
+ *     joint N-dimensional BFGS. The prior in LLfacA/LLfacV/FACscore is now a
+ *     proper N(0, sd2) density; the original used exp(-.5*P/sqrt(sd2)).
+ *  6. DERdiffAn: analytic gradient (series derivative computed with the
+ *     same terms), selected from R by control$grad (default "analytic").
+ *  7. Adaptive Gauss-Hermite quadrature (LLdiffAQ, DERdiffAQ, AQmoments):
+ *     per-subject grids centred on the posterior; control$adaptive (default TRUE).
  *
  *  Original copyright 2013 Dylan Molenaar, University of Amsterdam.
  *  GNU GPL v2 or later.
@@ -357,6 +364,393 @@ void DERdiff(double *y, double *x, int *N, int *nit, int *constrain,
 }
 
 /* ------------------------------------------------------------------ */
+/* Analytic gradient                                                    */
+/* ------------------------------------------------------------------ */
+
+/* nf_series plus d log p / du, using the same terms (so the derivative   */
+/* is exact for the truncated series between its term-count jumps).      */
+static double nf_series_d(double yy, double eps, double *dlogp)
+{
+  double kl, ks;
+  if ((M_PI * yy * eps) < 1) {
+    kl = sqrt(-2.0 * log(M_PI * yy * eps) / (M_PI * M_PI * yy));
+    if (kl < 1.0 / (M_PI * sqrt(yy))) kl = 1.0 / (M_PI * sqrt(yy));
+  } else kl = 1.0 / (M_PI * sqrt(yy));
+  if ((2.0 * sqrt(2.0 * M_PI * yy) * eps) < 1) {
+    ks = 2.0 + sqrt(-2.0 * yy * log(2.0 * eps * sqrt(2.0 * M_PI * yy)));
+    if (ks < (sqrt(yy) + 1.0)) ks = sqrt(yy) + 1.0;
+  } else ks = 2.0;
+
+  double p = 0.0, dp = 0.0;
+  if (ks < kl) {
+    /* p = S / sqrt(2 pi u^3),  S = sum c exp(-c^2 / 2u) */
+    double S = 0.0, dS = 0.0;
+    for (int k = (int)(-floor((ks-1)/2)); k <= (int)ceil((ks-1)/2); k++) {
+      double c = .5 + 2*k, e = c * exp(-c*c / (2.0*yy));
+      S += e; dS += e * c*c / (2.0*yy*yy);
+    }
+    double nrm = sqrt(2.0 * M_PI * yy * yy * yy);
+    p = S / nrm;
+    dp = dS / nrm - 1.5 * p / yy;
+  } else {
+    int KK = (int)ceil(kl);
+    for (int k = 1; k <= KK; k++) {
+      double e = k * exp(-k*k * M_PI*M_PI * yy / 2.0) * sin(k * M_PI * .5);
+      p += e; dp += e * (-k*k * M_PI*M_PI / 2.0);
+    }
+    p *= M_PI; dp *= M_PI;
+  }
+  *dlogp = dp / p;
+  return p;
+}
+
+/* Gradient of -2 logL with respect to the full parameter vector          */
+/* (ai[1..J], vi[1..J], ter[1..J], sd2A, sd2V), summed into `deriv` by     */
+/* `constrain` (fixed parameters, constrain == 0, are skipped). Same       */
+/* signature as DERdiff; `delta` is unused.                                */
+/*                                                                       */
+/* With posterior node weights w_q = W_q f_q / sum(W f), d logL_i / dθ =   */
+/* sum_q w_q sum_j d log f_ij(q) / dθ. For one response,                   */
+/*   log f = log p(u) - 2 la + v a xm - .5 v^2 t,  u = t / a^2, la = log a  */
+/*   d/dla = -2 u p'/p - 2 + v a xm,  d/dt = p'/p / a^2 - .5 v^2,          */
+/*   d/dv  = a xm - v t.                                                   */
+void DERdiffAn(double *y, double *x, int *N, int *nit, int *constrain,
+               int *npar, double *ai, double *vi, double *sd2A, double *sd2V,
+               double *ter, int *model, double *A, double *W, int *nq,
+               double *epsAlt, double *delta, double *ou, double *LL,
+               double *deriv)
+{
+  int n = *N, J = *nit, Q = *nq, nq2 = Q*Q, P = *npar, K = 3*J + 2, mod = *model;
+  double eps = *epsAlt;
+  double *xter  = (double *)R_alloc(J, sizeof(double));
+  double *nodeA = (double *)R_alloc(Q, sizeof(double));
+  double *nodeV = (double *)R_alloc(Q, sizeof(double));
+  double *logw  = (double *)R_alloc(nq2, sizeof(double));
+  double *logL  = (double *)R_alloc(n, sizeof(double));
+  double *G     = (double *)R_alloc((size_t)n*K, sizeof(double));   /* per-subject d logL */
+  for (int j = 0; j < J; j++) xter[j] = exp(ter[j]);
+  for (int q = 0; q < Q; q++) { nodeA[q] = sqrt(exp(*sd2A))*A[q]; nodeV[q] = sqrt(exp(*sd2V))*A[q]; }
+  for (int a = 0; a < Q; a++) for (int b = 0; b < Q; b++) logw[a*Q+b] = log(W[a]) + log(W[b]);
+
+  #ifdef _OPENMP
+  #pragma omp parallel
+  #endif
+  {
+    /* per (item, boundary node): log p - 2 la, d log p/du, a, u */
+    double *ls = (double *)malloc((size_t)J*Q*sizeof(double));
+    double *dl = (double *)malloc((size_t)J*Q*sizeof(double));
+    double *aa = (double *)malloc((size_t)J*Q*sizeof(double));
+    double *uu = (double *)malloc((size_t)J*Q*sizeof(double));
+    double *lp = (double *)malloc((size_t)nq2*sizeof(double));
+    #ifdef _OPENMP
+    #pragma omp for schedule(static)
+    #endif
+    for (int i = 0; i < n; i++) {
+      double *g = G + (size_t)i*K;
+      for (int k = 0; k < K; k++) g[k] = 0.0;
+      for (int q = 0; q < nq2; q++) lp[q] = 0.0;
+
+      /* pass 1: log density at every node (as item_logf), caching pieces */
+      for (int j = 0; j < J; j++) {
+        double yj = y[i + j*n];
+        if (yj == -999) continue;
+        double t = yj - xter[j], xm = x[i + j*n] - .5;
+        for (int n1 = 0; n1 < Q; n1++) {
+          int c = j*Q + n1;
+          double la = nodeA[n1] - ai[j], a = exp(la), u = t/(a*a), d = 0.0;
+          ls[c] = LOGZERO; aa[c] = a; uu[c] = u;
+          if (u > 0) {
+            double p = nf_series_d(u, eps, &d);
+            if (p > 0 && R_FINITE(p) && R_FINITE(d)) ls[c] = log(p) - 2.0*la;
+          }
+          dl[c] = d;
+          double *l = lp + n1*Q;
+          if (ls[c] == LOGZERO) { for (int n2 = 0; n2 < Q; n2++) l[n2] += LOGZERO; continue; }
+          for (int n2 = 0; n2 < Q; n2++) {
+            double v = (mod == 1) ? (nodeV[n2] - vi[j]) : exp(nodeV[n2] - vi[j]);
+            l[n2] += ls[c] + v*a*xm - .5*v*v*t;
+          }
+        }
+      }
+      double l0 = node_lse(lp, logw, nq2);
+      logL[i] = l0;
+      if (l0 <= LOGFLOOR) continue;          /* floored subject: flat, gradient 0 */
+      for (int q = 0; q < nq2; q++) lp[q] = exp(lp[q] + logw[q] - l0);   /* posterior weights */
+
+      /* pass 2: accumulate weighted derivatives */
+      double gsA = 0.0, gsV = 0.0;
+      for (int j = 0; j < J; j++) {
+        double yj = y[i + j*n];
+        if (yj == -999) continue;
+        double t = yj - xter[j], xm = x[i + j*n] - .5;
+        double gai = 0.0, gvi = 0.0, gt = 0.0;
+        for (int n1 = 0; n1 < Q; n1++) {
+          int c = j*Q + n1;
+          if (ls[c] == LOGZERO) continue;    /* node weight is 0 */
+          double a = aa[c], u = uu[c], d = dl[c];
+          double dla0 = -2.0*u*d - 2.0, dt0 = d/(a*a);
+          const double *w = lp + n1*Q;
+          double sla = 0.0;
+          for (int n2 = 0; n2 < Q; n2++) {
+            double wq = w[n2];
+            if (wq == 0.0) continue;
+            double v = (mod == 1) ? (nodeV[n2] - vi[j]) : exp(nodeV[n2] - vi[j]);
+            double dla = dla0 + v*a*xm, dv = a*xm - v*t, dt = dt0 - .5*v*v;
+            double dvdvi = (mod == 1) ? -1.0 : -v;           /* v = node - vi  or  exp(node - vi) */
+            double dvdsV = (mod == 1) ? .5*nodeV[n2] : .5*v*nodeV[n2];
+            sla += wq*dla;
+            gvi += wq*dv*dvdvi;
+            gt  += wq*dt;
+            gsV += wq*dv*dvdsV;
+          }
+          gai -= sla;                         /* la = nodeA - ai */
+          gsA += sla*.5*nodeA[n1];            /* nodeA = exp(sd2A/2) A */
+        }
+        g[j] = gai; g[J + j] = gvi; g[2*J + j] = -gt*xter[j];   /* t = y - exp(ter) */
+      }
+      g[3*J] = gsA; g[3*J + 1] = gsV;
+    }
+    free(ls); free(dl); free(aa); free(uu); free(lp);
+  }
+
+  double s = 0.0;
+  for (int i = 0; i < n; i++) {
+    s += logL[i];
+    LL[i] = (logL[i] <= LOGFLOOR) ? 1e-300 : exp(logL[i]);
+  }
+  *ou = -2.0 * s;
+  for (int p = 0; p < P; p++) deriv[p] = 0.0;
+  for (int k = 0; k < K; k++) {
+    int p = constrain[k];
+    if (p < 1 || p > P) continue;
+    double gk = 0.0;
+    for (int i = 0; i < n; i++) gk += G[(size_t)i*K + k];
+    deriv[p-1] += -2.0*gk;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Adaptive Gauss-Hermite quadrature                                    */
+/* ------------------------------------------------------------------ */
+/* Subject i gets its own product grid: log-boundary nodes               */
+/*   zA = muA[i] + sA[i] * A[n1],  drift nodes zV = muV[i] + sV[i] * A[n2] */
+/* (A, W: Gauss-Hermite rule for a standard normal). With prior           */
+/* N(0, s2A) x N(0, s2V), the marginal likelihood is                       */
+/*   sum_q W[n1] W[n2] * prior(zA, zV) / proposal(zA, zV) * prod_j f_ij    */
+/*   log(prior/proposal) for one axis = log(s/sigma) - z^2/(2 sigma^2) + A^2/2. */
+/* With mu = 0 and s = sigma this is exactly the non-adaptive rule. The    */
+/* nodes are held fixed while the optimizer runs (so the objective is a    */
+/* fixed smooth function and the gradient is exact); the population        */
+/* variances then enter only through the prior term.                      */
+/* A posterior SD never exceeds the prior SD, so each grid scale is capped */
+/* at the current prior SD. Without the cap the rule is invalid once       */
+/* sigma < s (the weight s/sigma at the centre node grows without bound as */
+/* sigma -> 0, which the optimizer can exploit). Where the cap is active   */
+/* the nodes move with sigma, and the gradient includes that dependence.   */
+
+/* Workspace per thread: 4*J*Q + Q*Q + 6*Q doubles. Returns log L_i.      */
+/* g (length 3J+2, or NULL): d log L_i / d (ai, vi, ter, sd2A, sd2V).      */
+/* mom (length 4, or NULL): posterior mean and SD of log ap and of vp.    */
+static double aq_subject(int i, const double *y, const double *x, int n, int J,
+                         const double *ai, const double *vi, const double *xter,
+                         double s2A, double s2V, int mod,
+                         const double *A, const double *W, int Q, double eps,
+                         double muA, double sA, double muV, double sV,
+                         double *ws, double *g, double *mom)
+{
+  int nq2 = Q*Q;
+  double *ls = ws, *dl = ls + J*Q, *aa = dl + J*Q, *uu = aa + J*Q, *lp = uu + J*Q;
+  double *zA = lp + nq2, *zV = zA + Q, *lwA = zV + Q, *lwV = lwA + Q;
+  double *accA = lwV + Q, *accV = accA + Q;
+  double sigA = sqrt(s2A), sigV = sqrt(s2V);
+  /* a variance fixed at (or underflowing to) 0: all nodes at 0, as in the */
+  /* non-adaptive rule, and no prior term                                  */
+  int degA = !(s2A > 0), degV = !(s2V > 0);
+  int capA = !degA && (sA > sigA), capV = !degV && (sV > sigV);
+  if (capA) sA = sigA;
+  if (capV) sV = sigV;
+  for (int k = 0; k < Q; k++) {
+    zA[k] = degA ? 0.0 : muA + sA*A[k];
+    zV[k] = degV ? 0.0 : muV + sV*A[k];
+    lwA[k] = degA ? log(W[k]) : log(W[k]) + log(sA) - .5*log(s2A) - zA[k]*zA[k]/(2.0*s2A) + .5*A[k]*A[k];
+    lwV[k] = degV ? log(W[k]) : log(W[k]) + log(sV) - .5*log(s2V) - zV[k]*zV[k]/(2.0*s2V) + .5*A[k]*A[k];
+  }
+  for (int a = 0; a < Q; a++) for (int b = 0; b < Q; b++) lp[a*Q + b] = lwA[a] + lwV[b];
+
+  /* pass 1: log density of every response at every node */
+  for (int j = 0; j < J; j++) {
+    double yj = y[i + j*n];
+    if (yj == -999) continue;
+    double t = yj - xter[j], xm = x[i + j*n] - .5;
+    for (int n1 = 0; n1 < Q; n1++) {
+      int c = j*Q + n1;
+      double la = zA[n1] - ai[j], a = exp(la), u = t/(a*a), d = 0.0;
+      ls[c] = LOGZERO; aa[c] = a; uu[c] = u;
+      if (u > 0) {
+        double p = g ? nf_series_d(u, eps, &d) : nf_series(u, eps);
+        if (p > 0 && R_FINITE(p) && R_FINITE(d)) ls[c] = log(p) - 2.0*la;
+      }
+      dl[c] = d;
+      double *l = lp + n1*Q;
+      if (ls[c] == LOGZERO) { for (int n2 = 0; n2 < Q; n2++) l[n2] += LOGZERO; continue; }
+      for (int n2 = 0; n2 < Q; n2++) {
+        double v = (mod == 1) ? (zV[n2] - vi[j]) : exp(zV[n2] - vi[j]);
+        l[n2] += ls[c] + v*a*xm - .5*v*v*t;
+      }
+    }
+  }
+  double m = -INFINITY;
+  for (int q = 0; q < nq2; q++) if (lp[q] > m) m = lp[q];
+  double l0 = LOGFLOOR;
+  if (m > 0.5*LOGZERO && R_FINITE(m)) {
+    double s = 0.0;
+    for (int q = 0; q < nq2; q++) s += exp(lp[q] - m);
+    l0 = m + log(s);
+    if (!R_FINITE(l0)) l0 = LOGFLOOR;
+  }
+  if (g) for (int k = 0; k < 3*J + 2; k++) g[k] = 0.0;
+  if (l0 <= LOGFLOOR) {                    /* floored subject: flat, keep old nodes */
+    if (mom) { mom[0] = muA; mom[1] = sA; mom[2] = muV; mom[3] = sV; }
+    return LOGFLOOR;
+  }
+  for (int q = 0; q < nq2; q++) lp[q] = exp(lp[q] - l0);   /* posterior weights */
+
+  if (mom) {
+    double mA = 0, mV = 0, vA = 0, vV = 0;
+    for (int a = 0; a < Q; a++) for (int b = 0; b < Q; b++) {
+      double w = lp[a*Q + b]; mA += w*zA[a]; mV += w*zV[b];
+    }
+    for (int a = 0; a < Q; a++) for (int b = 0; b < Q; b++) {
+      double w = lp[a*Q + b]; vA += w*(zA[a]-mA)*(zA[a]-mA); vV += w*(zV[b]-mV)*(zV[b]-mV);
+    }
+    mom[0] = mA; mom[1] = sqrt(vA); mom[2] = mV; mom[3] = sqrt(vV);
+  }
+  if (!g) return l0;
+
+  /* pass 2: gradient (items as in DERdiffAn; variances via the prior term) */
+  /* d log(prior/proposal weight) / d log sigma^2. Uncapped: nodes fixed,    */
+  /* -1/2 + z^2/(2 s2). Capped (s = sigma, z = mu + sigma A): the log(s/sigma) */
+  /* term is constant and dz/d log s2 = sigma A / 2, giving                 */
+  /* -z A/(2 sigma) + z^2/(2 s2); the items' dependence on z is added below. */
+  double gsA = 0.0, gsV = 0.0;
+  for (int a = 0; a < Q; a++) for (int b = 0; b < Q; b++) {
+    double w = lp[a*Q + b];
+    if (!degA) gsA += w*((capA ? -zA[a]*A[a]/(2.0*sigA) : -.5) + zA[a]*zA[a]/(2.0*s2A));
+    if (!degV) gsV += w*((capV ? -zV[b]*A[b]/(2.0*sigV) : -.5) + zV[b]*zV[b]/(2.0*s2V));
+  }
+  for (int k = 0; k < Q; k++) { accA[k] = 0.0; accV[k] = 0.0; }
+  for (int j = 0; j < J; j++) {
+    double yj = y[i + j*n];
+    if (yj == -999) continue;
+    double t = yj - xter[j], xm = x[i + j*n] - .5;
+    double gai = 0.0, gvi = 0.0, gt = 0.0;
+    for (int n1 = 0; n1 < Q; n1++) {
+      int c = j*Q + n1;
+      if (ls[c] == LOGZERO) continue;
+      double a = aa[c], u = uu[c], d = dl[c];
+      double dla0 = -2.0*u*d - 2.0, dt0 = d/(a*a);
+      const double *w = lp + n1*Q;
+      for (int n2 = 0; n2 < Q; n2++) {
+        double wq = w[n2];
+        if (wq == 0.0) continue;
+        double v = (mod == 1) ? (zV[n2] - vi[j]) : exp(zV[n2] - vi[j]);
+        double dv = a*xm - v*t, dvdz = (mod == 1) ? 1.0 : v;   /* v = zV - vi or exp(zV - vi) */
+        double dla = dla0 + v*a*xm;                            /* = d log f / d zA */
+        gai -= wq*dla;
+        gvi += wq*dv*(-dvdz);
+        gt  += wq*(dt0 - .5*v*v);
+        accA[n1] += wq*dla;
+        accV[n2] += wq*dv*dvdz;
+      }
+    }
+    g[j] = gai; g[J + j] = gvi; g[2*J + j] = -gt*xter[j];
+  }
+  if (capA) for (int k = 0; k < Q; k++) gsA += accA[k]*A[k]*.5*sigA;
+  if (capV) for (int k = 0; k < Q; k++) gsV += accV[k]*A[k]*.5*sigV;
+  g[3*J] = gsA; g[3*J + 1] = gsV;
+  return l0;
+}
+
+/* Shared driver. what: 0 = likelihood, 1 = gradient, 2 = posterior moments. */
+static void aq_driver(int what, double *y, double *x, int *N, int *nit, int *constrain, int *npar,
+                      double *ai, double *vi, double *sd2A, double *sd2V, double *ter, int *model,
+                      double *A, double *W, int *nq, double *epsAlt,
+                      double *muA, double *sA, double *muV, double *sV,
+                      double *ou, double *LL, double *deriv, double *mom)
+{
+  int n = *N, J = *nit, Q = *nq, K = 3*J + 2;
+  double s2A = exp(*sd2A), s2V = exp(*sd2V);
+  double *xter = (double *)R_alloc(J, sizeof(double));
+  double *logL = (double *)R_alloc(n, sizeof(double));
+  double *G = (what == 1) ? (double *)R_alloc((size_t)n*K, sizeof(double)) : NULL;
+  for (int j = 0; j < J; j++) xter[j] = exp(ter[j]);
+  size_t wsz = (size_t)4*J*Q + (size_t)Q*Q + 6*(size_t)Q;
+
+  #ifdef _OPENMP
+  #pragma omp parallel
+  #endif
+  {
+    double *ws = (double *)malloc(wsz*sizeof(double));
+    #ifdef _OPENMP
+    #pragma omp for schedule(static)
+    #endif
+    for (int i = 0; i < n; i++)
+      logL[i] = aq_subject(i, y, x, n, J, ai, vi, xter, s2A, s2V, *model, A, W, Q, *epsAlt,
+                           muA[i], sA[i], muV[i], sV[i], ws,
+                           G ? G + (size_t)i*K : NULL, (what == 2) ? mom + 4*(size_t)i : NULL);
+    free(ws);
+  }
+
+  double s = 0.0;
+  for (int i = 0; i < n; i++) {
+    s += logL[i];
+    if (LL) LL[i] = (logL[i] <= LOGFLOOR) ? 1e-300 : exp(logL[i]);
+  }
+  if (ou) *ou = -2.0 * s;
+  if (what == 1) {
+    int P = *npar;
+    for (int p = 0; p < P; p++) deriv[p] = 0.0;
+    for (int k = 0; k < K; k++) {
+      int p = constrain[k];
+      if (p < 1 || p > P) continue;
+      double gk = 0.0;
+      for (int i = 0; i < n; i++) gk += G[(size_t)i*K + k];
+      deriv[p-1] += -2.0*gk;
+    }
+  }
+}
+
+void LLdiffAQ(double *y, double *x, int *N, int *nit, double *ai, double *vi,
+              double *sd2A, double *sd2V, double *ter, int *model,
+              double *A, double *W, int *nq, double *epsAlt,
+              double *muA, double *sA, double *muV, double *sV, double *ou, double *LL)
+{
+  aq_driver(0, y, x, N, nit, NULL, NULL, ai, vi, sd2A, sd2V, ter, model, A, W, nq, epsAlt,
+            muA, sA, muV, sV, ou, LL, NULL, NULL);
+}
+
+void DERdiffAQ(double *y, double *x, int *N, int *nit, int *constrain, int *npar,
+               double *ai, double *vi, double *sd2A, double *sd2V, double *ter, int *model,
+               double *A, double *W, int *nq, double *epsAlt,
+               double *muA, double *sA, double *muV, double *sV,
+               double *ou, double *LL, double *deriv)
+{
+  aq_driver(1, y, x, N, nit, constrain, npar, ai, vi, sd2A, sd2V, ter, model, A, W, nq, epsAlt,
+            muA, sA, muV, sV, ou, LL, deriv, NULL);
+}
+
+/* Posterior moments (mom[4*i + 0..3] = mean, SD of log ap; mean, SD of vp) */
+/* computed on the current grid; used to re-centre the grid.               */
+void AQmoments(double *y, double *x, int *N, int *nit, double *ai, double *vi,
+               double *sd2A, double *sd2V, double *ter, int *model,
+               double *A, double *W, int *nq, double *epsAlt,
+               double *muA, double *sA, double *muV, double *sV, double *ou, double *mom)
+{
+  aq_driver(2, y, x, N, nit, NULL, NULL, ai, vi, sd2A, sd2V, ter, model, A, W, nq, epsAlt,
+            muA, sA, muV, sV, ou, NULL, NULL, mom);
+}
+
+/* ------------------------------------------------------------------ */
 /* LLfacA  -- OPTIMIZED (hoisted + log-space + OpenMP)                 */
 /* ------------------------------------------------------------------ */
 void LLfacA(double *y, double *x, int *N, int *nit, double *ai, double *vi,
@@ -400,7 +794,7 @@ void LLfacA(double *y, double *x, int *N, int *nit, double *ai, double *vi,
       LL[i] = 1e-300;
     else
       LL[i] = tmp2 / sqrt(2.0 * M_PI * exp(*sd2A))
-               * exp(-0.5 * Ap[i] / sqrt(exp(*sd2A)));
+               * exp(-0.5 * Ap[i] * Ap[i] / exp(*sd2A));   /* N(0, sd2A) prior on log a_p */
   }
 
   double logsum = 0.0;
@@ -451,9 +845,11 @@ void LLfacV(double *y, double *x, int *N, int *nit, double *ai, double *vi,
 
     if (tmp2 == 0.0 || !R_FINITE(tmp2))
       LL[i] = 1e-300;
-    else
+    else {
+      double PV = (*model == 1) ? Vp[i] : log(Vp[i]);
       LL[i] = tmp2 / sqrt(2.0 * M_PI * exp(*sd2V))
-               * exp(-0.5 * Vp[i] / sqrt(exp(*sd2V)));
+               * exp(-0.5 * PV * PV / exp(*sd2V));          /* N(0, sd2V) prior on v_p (D) or log theta_p (Q) */
+    }
   }
 
   double logsum = 0.0;
@@ -556,4 +952,172 @@ void makeT(int *nit, double *design, int *dim, int *r, double *T)
         equal(&design[j], &design[i], dim, &ou);
         T[i + j*(*r)] = ou;
       }
+}
+
+
+/* ------------------------------------------------------------------ */
+/* FACscore: per-subject factor scores for factest()                    */
+/*                                                                      */
+/* The old factest() ran one BFGS over all N person parameters with a   */
+/* numerical gradient (N+1 full LLfacA/LLfacV calls per gradient, and   */
+/* an N x N BFGS matrix). The objective is a sum of independent         */
+/* per-subject terms, so here each subject is minimized on its own      */
+/* with Brent's method (OpenMP over subjects).                          */
+/*                                                                      */
+/* Per-subject objective is identical to the corresponding term of      */
+/* LLfacA (which = 1, gamma) or LLfacV (which = 2, theta), including    */
+/* its prior term.                                                      */
+/*   which = 1: par = log gamma_p (Ap); integrate over drift nodes.     */
+/*   which = 2: par = Vp (model D) or log theta_p (model Q, Vp=exp(par))*/
+/*              integrate over boundary nodes.                          */
+/* Outputs: est[i], hess[i] (numerical 2nd derivative of -2 log post),  */
+/* conv[i] (0 = interior optimum, 1 = at search-interval edge).         */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+  const double *y, *x, *ai, *vi, *xter, *node, *logw;
+  int N, nit, nq, model, which, i;
+  double sd2A, sd2V, eps;
+  double *ls, *a, *lp;     /* workspace: ls/a are nit*nq (which = 2 cache) */
+} facinfo;
+
+static double fac_obj(double par, void *vinfo)
+{
+  facinfo *f = (facinfo *)vinfo;
+  int J = f->nit, Q = f->nq, N = f->N, i = f->i;
+  for (int n = 0; n < Q; n++) f->lp[n] = 0.0;
+  double s2, Pval;
+  if (f->which == 1) {
+    double ap = par;
+    for (int j = 0; j < J; j++) {
+      double yj = f->y[i + j*N];
+      if (yj == -999) continue;
+      double t = yj - f->xter[j], xm = f->x[i + j*N] - .5;
+      double la = ap - f->ai[j], a = exp(la), yy = t/(a*a), ls = LOGZERO;
+      if (yy > 0) { double p = nf_series(yy, f->eps); if (p > 0 && R_FINITE(p)) ls = log(p) - 2.0*la; }
+      for (int n = 0; n < Q; n++) {
+        if (ls == LOGZERO) { f->lp[n] += LOGZERO; continue; }
+        double v = (f->model == 1) ? (f->node[n] - f->vi[j]) : exp(f->node[n] - f->vi[j]);
+        f->lp[n] += ls + v*a*xm - .5*v*v*t;
+      }
+    }
+    s2 = exp(f->sd2A); Pval = par;
+  } else {
+    double Vp = (f->model == 1) ? par : exp(par);
+    for (int j = 0; j < J; j++) {
+      double yj = f->y[i + j*N];
+      if (yj == -999) continue;
+      double t = yj - f->xter[j], xm = f->x[i + j*N] - .5;
+      double v = (f->model == 1) ? (Vp - f->vi[j]) : Vp/exp(f->vi[j]);
+      for (int n = 0; n < Q; n++) {
+        double ls = f->ls[j*Q + n];
+        if (ls == LOGZERO) { f->lp[n] += LOGZERO; continue; }
+        double a = f->a[j*Q + n];
+        f->lp[n] += ls + v*a*xm - .5*v*v*t;
+      }
+    }
+    s2 = exp(f->sd2V); Pval = par;   /* latent is v_p (D) or log theta_p (Q) */
+  }
+  double m = -INFINITY;
+  for (int n = 0; n < Q; n++) { double z = f->lp[n] + f->logw[n]; if (z > m) m = z; }
+  if (!(m > 0.5*LOGZERO) || !R_FINITE(m)) return -2.0*LOGFLOOR;   /* LLfacA/V: LL = 1e-300 */
+  double s = 0.0;
+  for (int n = 0; n < Q; n++) s += exp(f->lp[n] + f->logw[n] - m);
+  /* normal prior on the latent variable: N(0, s2). (The original LLfacA/V used
+     exp(-.5*P/sqrt(s2)), i.e. the deviation was neither squared nor divided by
+     the variance.) */
+  double lpost = m + log(s) - .5*log(2.0*M_PI*s2) - .5*Pval*Pval/s2;
+  return -2.0*lpost;
+}
+
+/* Brent's minimizer on [lo, hi] (golden section + parabolic steps). */
+static double brent_min(double lo, double hi, double (*fn)(double, void *), void *info, double tol)
+{
+  const double c = 0.3819660112501051, eps = 1.4901161193847656e-08;
+  double a = lo, b = hi, v = a + c*(b - a), w = v, x = v, d = 0.0, e = 0.0;
+  double fx = fn(x, info), fv = fx, fw = fx;
+  for (int it = 0; it < 200; it++) {
+    double xm = .5*(a + b), tol1 = eps*fabs(x) + tol/3.0, tol2 = 2.0*tol1;
+    if (fabs(x - xm) <= tol2 - .5*(b - a)) break;
+    double p = 0, q = 0, r = 0, u;
+    if (fabs(e) > tol1) {
+      r = (x - w)*(fx - fv); q = (x - v)*(fx - fw); p = (x - v)*q - (x - w)*r; q = 2.0*(q - r);
+      if (q > 0) p = -p; else q = -q;
+      r = e; e = d;
+    }
+    if (fabs(p) >= fabs(.5*q*r) || p <= q*(a - x) || p >= q*(b - x)) {
+      e = (x < xm) ? b - x : a - x; d = c*e;
+    } else {
+      d = p/q; u = x + d;
+      if (u - a < tol2 || b - u < tol2) d = (x < xm) ? tol1 : -tol1;
+    }
+    u = (fabs(d) >= tol1) ? x + d : (d > 0 ? x + tol1 : x - tol1);
+    double fu = fn(u, info);
+    if (fu <= fx) {
+      if (u < x) b = x; else a = x;
+      v = w; fv = fw; w = x; fw = fx; x = u; fx = fu;
+    } else {
+      if (u < x) a = u; else b = u;
+      if (fu <= fw || w == x) { v = w; fv = fw; w = u; fw = fu; }
+      else if (fu <= fv || v == x || v == w) { v = u; fv = fu; }
+    }
+  }
+  return x;
+}
+
+void FACscore(double *y, double *x, int *N, int *nit, double *ai, double *vi,
+              double *sd2A, double *sd2V, double *ter, int *which, int *model,
+              double *A, double *W, int *nq, double *epsAlt, double *start,
+              double *halfwidth, double *tol, double *est, double *hess, int *conv)
+{
+  int n = *N, J = *nit, Q = *nq;
+  double *xter = (double *)R_alloc(J, sizeof(double));
+  double *node = (double *)R_alloc(Q, sizeof(double));
+  double *logw = (double *)R_alloc(Q, sizeof(double));
+  for (int j = 0; j < J; j++) xter[j] = exp(ter[j]);
+  /* integrate over the *other* latent variable's nodes */
+  double sdOther = sqrt(exp(*which == 1 ? *sd2V : *sd2A));
+  for (int q = 0; q < Q; q++) { node[q] = sdOther*A[q]; logw[q] = log(W[q]); }
+
+  #ifdef _OPENMP
+  #pragma omp parallel
+  #endif
+  {
+    facinfo f;
+    f.y = y; f.x = x; f.ai = ai; f.vi = vi; f.xter = xter; f.node = node; f.logw = logw;
+    f.N = n; f.nit = J; f.nq = Q; f.model = *model; f.which = *which;
+    f.sd2A = *sd2A; f.sd2V = *sd2V; f.eps = *epsAlt;
+    f.lp = (double *)malloc((size_t)Q*sizeof(double));
+    f.ls = (double *)malloc((size_t)J*Q*sizeof(double));
+    f.a  = (double *)malloc((size_t)J*Q*sizeof(double));
+    #ifdef _OPENMP
+    #pragma omp for schedule(dynamic, 8)
+    #endif
+    for (int i = 0; i < n; i++) {
+      f.i = i;
+      if (f.which == 2) {            /* series depends only on the boundary node: cache it */
+        for (int j = 0; j < J; j++) {
+          double yj = y[i + j*n];
+          for (int q = 0; q < Q; q++) {
+            double la = node[q] - ai[j], a = exp(la), ls = LOGZERO;
+            if (yj != -999) {
+              double yy = (yj - xter[j])/(a*a);
+              if (yy > 0) { double p = nf_series(yy, f.eps); if (p > 0 && R_FINITE(p)) ls = log(p) - 2.0*la; }
+            }
+            f.ls[j*Q + q] = ls; f.a[j*Q + q] = a;
+          }
+        }
+      }
+      double s0 = R_FINITE(start[i]) ? start[i] : 0.0;
+      double lo = s0 - *halfwidth, hi = s0 + *halfwidth;
+      double b = brent_min(lo, hi, fac_obj, &f, *tol);
+      est[i] = b;
+      /* not too small: the truncated series makes the objective step by ~1e-6 */
+      /* where the number of terms changes, which a tiny h turns into garbage. */
+      double h = 1e-2;
+      hess[i] = (fac_obj(b + h, &f) - 2.0*fac_obj(b, &f) + fac_obj(b - h, &f))/(h*h);
+      conv[i] = (b - lo < 1e-3*(*halfwidth) || hi - b < 1e-3*(*halfwidth)) ? 1 : 0;
+    }
+    free(f.lp); free(f.ls); free(f.a);
+  }
 }
