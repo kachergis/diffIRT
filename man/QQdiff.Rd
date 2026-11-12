@@ -14,15 +14,23 @@ QQdiff(object, items, plot=2, breaks=15, quant=NULL, maxRT=NULL)
   \item{items}{ A vector denoting for which items the QQ-plots need to be created.}
   \item{plot}{ Integer; 1: only QQ-plots. 2: both a QQ-plot and a histogram containing the predicted and observed distribution.}
   \item{breaks}{ Number of breaks to be used in \link{hist} when \code{plot}=2.}
-  \item{quant}{ The number of quantiles to be used. If \code{NULL}, the number of quantiles will equal the number of subjects.} 
-  \item{maxRT}{ The maximum response time used in finding the quantiles of the theoretical distribution. If \code{NULL}, twice the maximum 
-    observed response time is used for each item. Increasing \code{maxRT} will increase computation time and should 
-    only be used when \link{uniroot} produces errors.} 
+  \item{quant}{ The number of quantiles to be used, equally spaced between .05 and .95. If \code{NULL}, the smaller of 100
+    and the number of subjects (versions 1.5 and earlier used the number of subjects).} 
+  \item{maxRT}{ The upper end of the range over which the predicted response time distribution is integrated. If \code{NULL},
+    twice the maximum observed response time is used for each item. If the predicted distribution has not reached
+    the highest requested probability by \code{maxRT}, the range is doubled until it has.} 
   }
 
 \details{
   \code{QQdiff} calculates the predicted quantiles in the marginal response time distribution of the given 
     model (D-diffusion or Q-diffusion). 
+
+  The predicted distribution of an item (both responses combined, integrated over the person distribution) is
+  integrated once over a grid of 500 panels from Ter to \code{maxRT}, narrow near Ter where the density rises
+  steeply, with 8-point Gauss-Legendre quadrature in each panel. All quantiles are then found by inverting the
+  cubic Hermite interpolant of the cumulative distribution, which is accurate to about 1e-8. This takes a fraction
+  of a second per item, whatever the number of quantiles. Versions 1.5 and earlier called \link{uniroot} on
+  \link{integrate} for each quantile.
 }
 \value{
   Function \code{QQdiff} returns a list with entries:

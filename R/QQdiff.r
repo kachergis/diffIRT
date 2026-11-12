@@ -25,14 +25,15 @@ QQdiff=function(object,items,plot=2, breaks=15,quant=NULL,maxRT=NULL){
   if(plot==2) par(mfrow=c(ceiling(length(items)),2))
   if(plot==1) par(mfrow=c(ceiling(length(items)/2),2))
   
-  if(is.null(quant)) qq=N else qq=quant
+  # default: 100 quantiles (or N if fewer persons); versions <= 1.5 used N
+  if(is.null(quant)) qq=min(N,100) else qq=quant
   prob=seq(0.05,.95,length=qq)
   
   outO=matrix(,qq,length(items))
   outE=matrix(,qq,length(items))
   for(i in 1:length(items)){
     if(plot==2){
-      x=seq(ter[items[i]],max(rt[,items[i]],na.rm=T),length=1000)
+      x=seq(exp(ter[items[i]]),max(rt[,items[i]],na.rm=T),length=1000)   # (started at log Ter before)
       pred=mdiffIRT(x,ai[items[i]],vi[items[i]],ter[items[i]],sd2A,sd2V,A,W,model,eps)
       hist(rt[,items[i]],freq=F,main=paste("item",items[i]),xlab="observed and predicted distribution",ylim=c(0,max(pred)),breaks)
       lines(x,pred,lty=2)
