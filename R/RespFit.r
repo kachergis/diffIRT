@@ -1,69 +1,102 @@
 RespFit=function(object,order=2){
+  # Limited-information goodness-of-fit test Mr (Maydeu-Olivares & Joe, 2005) for the responses.
+  #
+  # Mr only needs the marginal moments up to 'order' (pi_S = P(all items in S correct),
+  # |S| <= order), their asymptotic covariance and their derivatives. With binary items
+  # x_j^2 = x_j, so Cov(x_S, x_T) = pi_{S u T} - pi_S pi_T: every quantity needs joint
+  # probabilities of at most 2*order items, computed directly by quadrature. (Earlier
+  # versions enumerated all 2^nit response patterns, which was infeasible beyond ~14 items.)
   if(object$conv!=0) stop("The solution in 'object' has not converged.")
   if(object$nr_fail!=0) cat("Warning: The solution provided in 'object' might be instable.\n")
   if(order==1) stop("The Mr test is not possible with only first-order moments, please use at least order=2")
-  
-    nit=object$nit
-    N=object$N
-    ai=object$par.log[1:nit]
-    vi=object$par.log[(nit+1):(2*nit)]
-    sd2A=exp(object$par.log[3*nit+1])
-    sd2V=exp(object$par.log[3*nit+2])
-    model=object$model
-    nq=object$nq
-    W=object$W
-    A=object$A
-    x=object$score
-    if(any(is.na(x)))
-      warning("RespFit counts missing responses as incorrect when computing the observed moments, so Mr can be biased when there are missing data.")
-    constrain=object$constrain
-      
-    o=matrix(,1,1)                                                       # Vector for observed moments
-    for(i in 1:order) o=cbind(o,fitObs(x,i))                         # Obsereved moments up to moment 'order'
-    o=t(as.matrix(o[,-1]))
-    pi.vec=fitPred(ai,vi,sd2A,sd2V,nit,model,A,W)                        # all expected moments = pi without dot in the matrix on the right upper page 1010; Heavy, in future try to omit its computation
-    design=fitOrders(nit,nit)
-    dim=fitCumChoose(nit,nit)
-    r=fitCumChoose(nit,order)
-    Tr=matrix(0,r,dim)
-    Tr=cbind(0,matrix(.C("makeT",as.integer(nit),as.double(design),
-            as.integer(dim),as.integer(r),as.double(Tr))[[5]],r,dim))    # matrix Tr from the upper right matrix and Eq 3 on p. 1010 of Maydeu - Olivares & Joe, 2005
-    gamma=diag(c(pi.vec))-pi.vec%*%t(pi.vec)                             # gamma from the equation below Eq 2
-    k=Tr%*%gamma%*%t(Tr)                                                 # ksi from Eq 3
-    der=fitDeriv(ai,vi,sd2A,sd2V,nit,model,A,W)                          # calculate derivatives, expensive, maybe omit this calulation in the future
-    if(model==2) der=der[,-((nit+1):(2*nit+2))]
-    d=Tr%*%der                                                           # select the appropriate derivatives
-    Mr=-999
-    df=-999
-    if(qr(d)$rank<ncol(d))
-      cat("identification problems: matrix of first-order derivatives is not of full column rank\n")
-    if(qr(d)$rank==ncol(d)) {
-      dkd=t(d)%*%solve(k)%*%d
-      sdkd=try(solve(dkd),silent=T)
-      if(is.character(sdkd)) sdkd=try(solve(dkd+rnorm(ncol(dkd)^2,0,.0000001)),silent=T)
-      if(!is.character(sdkd)){
-        Cr=solve(k)-solve(k)%*%d%*%sdkd%*%t(d)%*%solve(k)
-        Mr=N*t(t(o)-Tr%*%pi.vec)%*%Cr%*%(t(o)-Tr%*%pi.vec)
-        info=fitCumChoose(nit,order)
-        if(model==1) df=info-max(constrain[1:(2*nit)])-length(unique(constrain[(3*nit+1):(3*nit+2)]))-2
-        if(model==2){
-          x1=length(unique(constrain[1:nit]))
-          x2=length(unique(constrain[(nit+1):(2*nit)]))
-          df=info-max(x1,x2)-length(unique(constrain[(3*nit+1):(3*nit+2)]))-2
-        }       
-    } else cat("error: the weighted covariance matrix of the residuals is singular\n")
+
+  nit=object$nit
+  N=object$N
+  model=object$model
+  W=object$W
+  A=object$A
+  x=object$score
+  constrain=object$constrain
+  if(any(is.na(x)))
+    warning("RespFit counts missing responses as incorrect when computing the observed moments, so Mr can be biased when there are missing data.")
+  if(order>nit) stop("'order' cannot exceed the number of items.")
+
+  # observed moments, in the order of fitItems(): all single items, then all pairs, ...
+  o=unlist(lapply(1:order,function(i) fitObs(x,i)))
+
+  # the moments: item sets S (one per row of fitItems, without its leading all-zero row)
+  X=fitItems(nit,order)[-1,,drop=FALSE]
+  sets=lapply(1:nrow(X),function(r) which(X[r,]==1))
+  nm=length(sets)
+
+  # probability correct for each item at each node of the (boundary x drift) product grid
+  nq=length(A)
+  Wq=as.vector(outer(W,W))                     # node (n1, n2) -> index n1 + nq*(n2-1)
+  probs=function(th){
+    ai=th[1:nit]; vi=th[(nit+1):(2*nit)]; sA=sqrt(exp(th[2*nit+1])); sV=sqrt(exp(th[2*nit+2]))
+    gam=rep(exp(A*sA),nq)                      # person boundary at node n1
+    lat=rep(A*sV,each=nq)                      # person drift latent at node n2
+    if(model==1) logit=outer(gam,exp(ai),"/")*outer(lat,vi,"-")
+    else logit=outer(gam,exp(ai),"/")*outer(exp(lat),exp(vi),"/")
+    logit[logit<(-709)]=-709
+    1/(1+exp(-logit))                          # nodes x items
+  }
+  moments=function(p) sapply(sets,function(S) sum(Wq*apply(p[,S,drop=FALSE],1,prod)))
+
+  th=object$par.log[c(1:(2*nit),3*nit+1,3*nit+2)]
+  p=probs(th)
+  M=sapply(sets,function(S) apply(p[,S,drop=FALSE],1,prod))   # nodes x moments
+  pi.vec=colSums(Wq*M)
+
+  # E[x_S x_T] = pi_{S u T}: products of the node-wise moments are right unless S and T share items
+  E2=crossprod(M*Wq,M)
+  for(a in 1:nm) for(b in a:nm){
+    sh=intersect(sets[[a]],sets[[b]])
+    if(length(sh)){
+      E2[a,b]=E2[b,a]=sum(Wq*apply(p[,union(sets[[a]],sets[[b]]),drop=FALSE],1,prod))
     }
-    Z=rbind(t(Tr%*%pi.vec),(o))
-    
-    X=fitItems(nit,order)
-    nms=c()
-    for(i in 1:nrow(X)) nms[i]=paste(X[i,],collapse="")
-    mat=t(Z)
-    nrms=sqrt(N) * (mat[,2]- mat[,1])/sqrt((1/diag(Cr)))
-    mat=cbind(round(mat,3),round(nrms,3))
-    dimnames(mat)[[2]]=c('pred','obs','Z')
-    mat=data.frame(mat,row.names=cbind(matrix(nms[-1])))
-    respfitRES=list(model=model,Z=mat,Mr=Mr,df=df,order=order,nit=nit)
-    class(respfitRES)<- "RespFit"
-    return(respfitRES)
+  }
+  k=E2-pi.vec%*%t(pi.vec)                       # asymptotic covariance of the moments (Xi_r)
+
+  # Derivatives of the moments with respect to the free parameters (mapped through
+  # 'constrain'). Responses alone do not identify every parameter: in the D model the
+  # scale of the drift is free (multiplying theta, v, a and omega_theta by c leaves all
+  # probabilities unchanged); in the Q model accuracy depends on a[i]*v[i] and on
+  # omega_gamma^2 + omega_theta^2 only. Mr is therefore computed with an orthonormal basis
+  # of the column space of the derivative matrix, and df = #moments - its rank.
+  # (In versions <= 1.5 the Q-model derivatives were wrong: fitDeriv tested
+  # toupper(model)=="Q", which is never true for the numeric model code 2, so v* stayed on
+  # the log scale. In the D model the derivatives were right, but the free drift scale was
+  # treated as identified, and the df subtracted 2 more than the number of parameters.)
+  h=1e-5
+  dfull=sapply(seq_along(th),function(j){ tp=th; tm=th; tp[j]=tp[j]+h; tm[j]=tm[j]-h
+    (moments(probs(tp))-moments(probs(tm)))/(2*h) })
+  cpos=constrain[c(1:(2*nit),3*nit+1,3*nit+2)]  # free-parameter number of each column (0 = fixed)
+  free=sort(unique(cpos[cpos!=0]))
+  d=sapply(free,function(q) rowSums(dfull[,cpos==q,drop=FALSE]))
+  d=matrix(d,nm)
+  d=d[,colSums(d^2)>0,drop=FALSE]
+  sv=svd(sweep(d,2,sqrt(colSums(d^2)),"/"))
+  rk=sum(sv$d>1e-5*sv$d[1])            # true directions are >1e-2; quadrature artifacts ~1e-7 or less
+  U=sv$u[,1:rk,drop=FALSE]
+
+  Mr=-999
+  df=-999
+  Cr=matrix(NA,nm,nm)
+  ki=try(solve(k),silent=TRUE)
+  if(inherits(ki,"try-error")){
+    cat("error: the covariance matrix of the moments is singular\n")
+  } else {
+    Cr=ki-ki%*%U%*%solve(t(U)%*%ki%*%U)%*%t(U)%*%ki
+    res=o-pi.vec
+    Mr=N*as.numeric(t(res)%*%Cr%*%res)
+    df=nm-rk
+  }
+
+  nms=sapply(1:nrow(X),function(r) paste(X[r,],collapse=""))
+  nrms=sqrt(N)*(o-pi.vec)/sqrt(1/diag(Cr))
+  mat=data.frame(pred=round(pi.vec,3),obs=round(o,3),Z=round(nrms,3),row.names=nms)
+  respfitRES=list(model=model,Z=mat,Mr=Mr,df=df,order=order,nit=nit)
+  class(respfitRES)<- "RespFit"
+  return(respfitRES)
 }
