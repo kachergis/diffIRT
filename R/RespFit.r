@@ -14,6 +14,8 @@ RespFit=function(object,order=2){
     W=object$W
     A=object$A
     x=object$score
+    if(any(is.na(x)))
+      warning("RespFit counts missing responses as incorrect when computing the observed moments, so Mr can be biased when there are missing data.")
     constrain=object$constrain
       
     o=matrix(,1,1)                                                       # Vector for observed moments

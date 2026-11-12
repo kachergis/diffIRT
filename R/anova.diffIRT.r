@@ -1,7 +1,7 @@
 anova.diffIRT = function (object, object2, ...) {
     if (missing(object2))
         stop("Object 2 is missing.\n")
-    if (!(all.equal(object$x, object2$x)))
+    if (!isTRUE(all.equal(object$score, object2$score)) || !isTRUE(all.equal(object$rt, object2$rt)))
         warning("It appears that the model in the first object is fitted on a different 
               dataset as compared to the model in the second object.\n")
     LL1 = object$totLL

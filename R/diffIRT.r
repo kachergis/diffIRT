@@ -27,6 +27,13 @@ diffIRT=function(rt, x, model="D", constrain=NULL,start=NULL, se=F, control=list
   rt=as.matrix(rt)
   if(sum((dim(rt)==dim(x))*1)!=2)
     stop("The matrix of response times should be of same size as the matrix of responses\n")
+  if(any(!is.na(x) & x!=0 & x!=1))
+    stop("Responses in 'x' should be coded 0 (incorrect) or 1 (correct), with NA for missing.\n")
+  if(any(!is.na(rt) & rt<=0))
+    stop("Response times in 'rt' should be positive (use NA for missing).\n")
+  allmiss=which(rowSums(!is.na(rt) & !is.na(x))==0)
+  if(length(allmiss)>0)
+    stop("Subject(s) ",paste(allmiss,collapse=", ")," have no observed responses on any item; remove them before fitting.\n")
   N=nrow(rt)
   nit=ncol(rt)
   if(toupper(model)!="D" & toupper(model)!="Q" )
@@ -87,7 +94,6 @@ diffIRT=function(rt, x, model="D", constrain=NULL,start=NULL, se=F, control=list
   if(length(con$nq)==0)
     stop("Invalid number of quadrature points provided")
   
-  if(length(complete.cases(rt))!=N | length(complete.cases(x))!=N ) stop("One or more of the subjects has missings on all items.")
   rt[is.na(rt)]=-999
   rt[is.na(x)]=-999
   x[is.na(x)]=-999

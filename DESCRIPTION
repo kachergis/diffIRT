@@ -6,6 +6,8 @@ Date: 2015-08-13
 Author: Dylan Molenaar
 Maintainer: Dylan Molenaar <d.molenaar@uva.nl>
 Depends: statmod
+Suggests: testthat (>= 3.0.0)
+Config/testthat/edition: 3
 Description: Package to fit diffusion-based IRT models to response and
         response time data. Models are fit using marginal maximum
         likelihood. Parameter restrictions (fixed value and equality
