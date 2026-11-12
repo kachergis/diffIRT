@@ -4,7 +4,6 @@
 # Item parameters are drawn once per model and held fixed; person parameters
 # are redrawn every replication from the simdiff() defaults:
 #   log gamma_p ~ N(0, .3^2); D: theta_p ~ N(0, .5^2); Q: log theta_p ~ N(0, .3^2).
-Sys.setenv(OMP_NUM_THREADS = "1")          # parallelise over replications instead
 suppressMessages({ library(diffIRT); library(parallel) })
 args <- commandArgs(TRUE)
 reps <- as.integer(args[1]); out <- args[2]
@@ -27,7 +26,7 @@ one <- function(model, N, rep) {
   truth <- c(it$ai, it$vi, it$ter, it$sdA, it$sdV)
   msg <- character(0)
   t <- system.time(f <- tryCatch(withCallingHandlers(
-         { o <- capture.output(r <- diffIRT(s$rt, s$x, model = model, se = TRUE, control = list(nq = nq, adaptive = adapt))); msg <- o; r },
+         { o <- capture.output(r <- diffIRT(s$rt, s$x, model = model, se = TRUE, control = list(nq = nq, adaptive = adapt, threads = 1))); msg <- o; r },
          warning = function(w) invokeRestart("muffleWarning")),
        error = function(e) conditionMessage(e)))[["elapsed"]]
   if (is.character(f)) return(list(model = model, N = N, rep = rep, error = f, time = t))

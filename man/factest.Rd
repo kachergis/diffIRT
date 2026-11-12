@@ -28,6 +28,8 @@ factest(object,start=NULL,se=F, control=list())
         \item{adaptive}{ Logical; if the model was fitted with adaptive quadrature (the default in \code{\link{diffIRT}}),
               integrate over the other latent variable on each person's adaptive grid and start each search at the
               person's posterior mean. Default \code{TRUE}; \code{FALSE} uses the non-adaptive grid.}
+        \item{threads}{ Number of OpenMP threads for the per-person searches. Default: the value used to fit
+              \code{object} (see \code{\link{diffIRT}}); \code{NULL} uses the OpenMP default.}
     }
   }
 
