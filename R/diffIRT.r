@@ -161,14 +161,19 @@ diffIRT=function(rt, x, model="D", constrain=NULL,start=NULL, se=F, control=list
   if(model==2) par[(nit+1):(2*nit)]=exp(par.log[(nit+1):(2*nit)])
   par[c(3*nit+1,3*nit+2)]=sqrt(par[c(3*nit+1,3*nit+2)])
   if(se){
+    # hessian is of -2LL, so the covariance of the free (internal-scale) parameters is solve(.5*H).
     var.log=diag(solve(.5*res$hessian))
-    var=var.log
     hessian=res$hessian
-    var[c(1:nit,(2*nit+1):(3*nit+2))]= par[c(1:nit,(2*nit+1):(3*nit+2))]^2 * var.log[c(1:nit,(2*nit+1):(3*nit+2))]
-    if(model==2) var[(nit+1):(2*nit)]= par[(nit+1):(2*nit)]^2 * var.log[(nit+1):(2*nit)]
-    var[c(3*nit+1,3*nit+2)]=.5/par[c(3*nit+1,3*nit+2)]*var[c(3*nit+1,3*nit+2)]
+    # Delta method, d(reported)/d(internal) for each parameter: a, Ter (and v in the Q model)
+    # are exp(internal); omega = exp(internal/2), with internal = log(omega^2).
+    # var.log is indexed by free parameter, so look up one full-vector index per free parameter.
+    jac=rep(1,3*nit+2)
+    jac[c(1:nit,(2*nit+1):(3*nit))]=par[c(1:nit,(2*nit+1):(3*nit))]
+    if(model==2) jac[(nit+1):(2*nit)]=par[(nit+1):(2*nit)]
+    jac[c(3*nit+1,3*nit+2)]=par[c(3*nit+1,3*nit+2)]/2
+    var=jac[match(1:npars,constrain)]^2*var.log
     std.err=rep(-999,3*nit+2)
-    std.err[constrain!=0]=sqrt(var[constrain])
+    std.err[constrain!=0]=sqrt(var[constrain[constrain!=0]])
   } else { 
         std.err=NULL
         hessian=NULL
