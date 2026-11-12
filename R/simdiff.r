@@ -1,4 +1,5 @@
-simdiff=function(N,nit,ai=NULL,vi=NULL,gamma=NULL,theta=NULL,ter=NULL,model="D",max.iter=19999,eps=1e-15){
+simdiff=function(N,nit,ai=NULL,vi=NULL,gamma=NULL,theta=NULL,ter=NULL,model="D",max.iter=19999,eps=1e-15,
+                 omega=NULL,rho=0,miss=0){
   vp=theta
   ap=gamma
    if (missing(N)|missing(nit)) stop("Number of subjects and/or the number of items is missing.")
@@ -7,6 +8,7 @@ simdiff=function(N,nit,ai=NULL,vi=NULL,gamma=NULL,theta=NULL,ter=NULL,model="D",
     stop("The 'model' argument should be either 'D' for the D-diffusion IRT model or 'Q' for the Q-diffusion IRT model.")
 
   if(!is.null(ai) & !is.null(vi) & !is.null(ap) & !is.null(vp) & !is.null(ter)) {
+    if(!is.null(omega) | rho!=0) warning("'omega' and 'rho' are ignored when the person parameters are given.")
     if(length(ai)!=length(vi) | length(ai)!=length(ter) | length(vi)!=length(ter) )
       stop("Error: 'a[i]', 'v[i]', and 'Ter[i]' are not the same length\n")
     if(length(ap)!=length(vp)) stop("Error: 'gamma[p]' and 'theta[p]' are not the same length\n")
@@ -25,15 +27,23 @@ simdiff=function(N,nit,ai=NULL,vi=NULL,gamma=NULL,theta=NULL,ter=NULL,model="D",
   }
   else{
     if(is.null(ai) & is.null(vi) & is.null(ap) & is.null(vp) & is.null(ter)){
-      ap=rlnorm(N,0,.3)
+      # Person parameters: log gamma ~ N(0, omega_gamma^2); theta ~ N(0, omega_theta^2) (D) or
+      # log theta ~ N(0, omega_theta^2) (Q), with correlation 'rho' between the two latent
+      # variables. With the defaults the random numbers are drawn exactly as in earlier versions.
+      if(is.null(omega)) omega=c(.3, if(toupper(model)=="Q") .3 else .5)
+      if(length(omega)!=2 || any(omega<0)) stop("'omega' should be two non-negative standard deviations: c(omega_gamma, omega_theta).")
+      if(abs(rho)>1) stop("'rho' should be between -1 and 1.")
+      zA=rnorm(N)
+      ap=exp(omega[1]*zA)
       ai=exp(runif(nit,-1,0))
       ter=runif(nit,.5,1.5)
+      latV=function() omega[2]*(rho*zA+sqrt(1-rho^2)*rnorm(N))
       if(toupper(model)=="Q"){
-        vp=rlnorm(N,0,.3)
+        vp=exp(latV())
         vi=exp(runif(nit,0,1))
       }
       if(toupper(model)=="D"){
-        vp=rnorm(N,0,.5)
+        vp=latV()
         vi=runif(nit,-1.5,.5)
       }
     } else stop("Error: true values for either a[i], v[i], gamma[p], theta[p], and/or Ter[p] are missing")
@@ -74,6 +84,11 @@ simdiff=function(N,nit,ai=NULL,vi=NULL,gamma=NULL,theta=NULL,ter=NULL,model="D",
     rt[p,j]=ou+ter[j]
     x[p,j]=score
   }
+  }
+  if(miss>0){                                    # missing completely at random
+    if(miss>=1) stop("'miss' should be a proportion below 1.")
+    m=matrix(runif(N*nit)<miss,N,nit)
+    rt[m]=NA; x[m]=NA
   }
   return(list(rt=rt,x=x,ai=ai,vi=vi,gamma=ap,theta=vp,ter=ter))
 }

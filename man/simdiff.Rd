@@ -9,7 +9,7 @@
 
 \usage{
 simdiff(N,nit,ai=NULL,vi=NULL,gamma=NULL,theta=NULL,ter=NULL,
-        model="D",max.iter=19999,eps=1e-15)
+        model="D",max.iter=19999,eps=1e-15,omega=NULL,rho=0,miss=0)
 }
 \arguments{
   \item{N}{ number of subjects.}
@@ -22,6 +22,13 @@ simdiff(N,nit,ai=NULL,vi=NULL,gamma=NULL,theta=NULL,ter=NULL,
   \item{model}{ string; Either "D" to fit the D-diffusion IRT model or "Q" to fit the Q-diffusion IRT model.}
   \item{max.iter}{ maximum number of iterations for the rejection algorithm. See \bold{Details}.}
   \item{eps}{ convergence criterion for the rejection algorithm. See \bold{Details}}
+  \item{omega}{ when the true parameters are not given: the standard deviations \code{c(omega[gamma], omega[theta])}
+        of log \code{gamma[p]} and of \code{theta[p]} (D model) or log \code{theta[p]} (Q model). Default
+        \code{c(.3, .5)} for the D model and \code{c(.3, .3)} for the Q model.}
+  \item{rho}{ when the true parameters are not given: the correlation between log \code{gamma[p]} and
+        \code{theta[p]} (D) or log \code{theta[p]} (Q). Default 0. Note that \code{\link{diffIRT}} assumes the two are
+        independent.}
+  \item{miss}{ proportion of responses (and their response times) set to \code{NA}, completely at random. Default 0.}
   }
 
 \details{

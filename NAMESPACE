@@ -4,7 +4,7 @@ export(diffIRT, factest,QQdiff, RespFit, simdiff, simdiffT)
 
 importFrom("statmod", "gauss.quad")
 importFrom("stats", "anova", "logLik", "nobs", "vcov","complete.cases", "integrate", "na.omit", "optim", "optimHess",
-     "pchisq", "qlogis", "quantile", "rlnorm", "rnorm", "runif","uniroot", "var")
+     "pchisq", "qlogis", "quantile", "rlnorm", "rnorm", "runif","uniroot", "var", "predict", "fitted", "simulate")
 importFrom("graphics", "abline", "hist", "lines", "par")
 importFrom("utils", "combn")
 
@@ -17,3 +17,6 @@ S3method(print, RespFit)
 S3method(summary, diffIRT)
 S3method(summary, RespFit)
 S3method(vcov, diffIRT)
+S3method(predict, diffIRT)
+S3method(fitted, diffIRT)
+S3method(simulate, diffIRT)
